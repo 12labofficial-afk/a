@@ -104,11 +104,8 @@ def build_geometry(parts: dict) -> dict:
     fore_r_len = fore_r.height * 0.78 if fore_r else bh * 0.28
     wrist_right = (elbow_right[0], elbow_right[1] + fore_r_len)
 
-    # Pull the hand back up over the forearm's own end a little: both pieces are cut with
-    # a rounded wrist edge, so butting them together shows two bumps side by side instead
-    # of one — the hand needs to sit far enough onto the forearm to cover its cut edge.
-    hand_left = (wrist_left[0], wrist_left[1] - fore_l_len * 0.12)
-    hand_right = (wrist_right[0], wrist_right[1] - fore_r_len * 0.12)
+    hand_left = (wrist_left[0], wrist_left[1] + fore_l_len * 0.04)
+    hand_right = (wrist_right[0], wrist_right[1] + fore_r_len * 0.04)
 
     thigh_l_len = thigh_l.height * 0.72 if thigh_l else 0.0
     knee_left = (hip_left[0], hip_left[1] + thigh_l_len)
