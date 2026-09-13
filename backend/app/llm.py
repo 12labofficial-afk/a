@@ -10,8 +10,8 @@ import requests
 from app import config
 
 VALID_MODES = {"idle", "talk", "wave", "point"}
-VALID_RIGHT_HAND = {"hand_right", "right_hand_prop", "right_palm_1", "right_palm_2", "right_palm_3"}
-VALID_LEFT_HAND = {"hand_left", "left_palm_1", "left_palm_2", "left_palm_3"}
+VALID_RIGHT_HAND = {"right_palm_1", "right_palm_2", "right_palm_3", "right_hand_prop"}
+VALID_LEFT_HAND = {"left_palm_1", "left_palm_2", "left_palm_3", "left_hand_prop"}
 VALID_CAMERA = {"two_shot", "close_up_speaker", "wide_room", "dramatic_zoom"}
 
 PROMPT_TEMPLATE = """You are a 2D cartoon animation director. A character named "{character}" \
@@ -21,8 +21,8 @@ Genre: {genre}
 
 Choose the best animation choreography for this single line and reply with ONLY compact JSON, no prose:
 {{"mode": one of ["idle","talk","wave","point"],
-"rightHand": one of ["hand_right","right_hand_prop","right_palm_1","right_palm_2","right_palm_3"],
-"leftHand": one of ["hand_left","left_palm_1","left_palm_2","left_palm_3"],
+"rightHand": one of ["right_palm_1","right_palm_2","right_palm_3","right_hand_prop"],
+"leftHand": one of ["left_palm_1","left_palm_2","left_palm_3","left_hand_prop"],
 "cameraShot": one of ["two_shot","close_up_speaker","wide_room","dramatic_zoom"]}}
 """
 
@@ -36,8 +36,8 @@ def _extract_json(text: str) -> dict:
 
 def _sanitize(data: dict) -> dict:
     mode = data.get("mode") if data.get("mode") in VALID_MODES else "talk"
-    right_hand = data.get("rightHand") if data.get("rightHand") in VALID_RIGHT_HAND else "hand_right"
-    left_hand = data.get("leftHand") if data.get("leftHand") in VALID_LEFT_HAND else "hand_left"
+    right_hand = data.get("rightHand") if data.get("rightHand") in VALID_RIGHT_HAND else "right_palm_1"
+    left_hand = data.get("leftHand") if data.get("leftHand") in VALID_LEFT_HAND else "left_palm_1"
     camera = data.get("cameraShot") if data.get("cameraShot") in VALID_CAMERA else "two_shot"
     return {"mode": mode, "rightHand": right_hand, "leftHand": left_hand, "cameraShot": camera}
 
@@ -90,7 +90,7 @@ def _heuristic(character: str, line: str, emotion: str) -> dict:
         mode, camera = "talk", "close_up_speaker"
     else:
         mode, camera = "talk", "two_shot"
-    return {"mode": mode, "rightHand": "right_palm_1", "leftHand": "hand_left", "cameraShot": camera}
+    return {"mode": mode, "rightHand": "right_palm_1", "leftHand": "left_palm_1", "cameraShot": camera}
 
 
 def get_choreography(character: str, line: str, emotion: str, genre: str) -> dict:

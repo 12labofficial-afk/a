@@ -1,4 +1,7 @@
-"""Python port of masterSheetRigEngine.ts calculateRigPose — procedural idle/talk/wave sway."""
+"""Procedural idle/talk/wave/point sway.
+
+Hand slot names follow the blueprint's anatomical naming: selectedRightHand holds the
+character's right-hand art, which the renderer draws on the viewer's left."""
 import math
 from dataclasses import dataclass
 
@@ -17,8 +20,8 @@ class RigPose:
     rightLowerLegRot: float = 0.0
     leftThighRot: float = 0.0
     leftLowerLegRot: float = 0.0
-    selectedRightHand: str = "hand_right"
-    selectedLeftHand: str = "hand_left"
+    selectedRightHand: str = "right_palm_1"
+    selectedLeftHand: str = "left_palm_1"
 
 
 def calculate_rig_pose(
@@ -33,8 +36,8 @@ def calculate_rig_pose(
     blink_cycle = t_seconds % 3.6
     is_blinking = force_blink or blink_cycle < 0.16
 
-    right_hand = right_hand_prop or "hand_right"
-    left_hand = left_hand_prop or "hand_left"
+    right_hand = right_hand_prop or "right_palm_1"
+    left_hand = left_hand_prop or "left_palm_1"
 
     if mode == "wave":
         wave_freq = t * 6.0

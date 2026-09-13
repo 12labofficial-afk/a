@@ -6,6 +6,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.rig_pose import calculate_rig_pose, RigPose
 from app.rig_assets import get_pivot
+from app.sheet_template import (
+    SCREEN_LEFT_PARTS, SCREEN_RIGHT_PARTS,
+    HAND_VARIANTS_SCREEN_LEFT, HAND_VARIANTS_SCREEN_RIGHT,
+)
 
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
@@ -40,14 +44,14 @@ def build_geometry(parts: dict) -> dict:
     """
     body = parts.get("body")
     head = parts.get("head_eyes_opened") or parts.get("head_eyes_closed")
-    arm_l = parts.get("arm_left_upper")
-    arm_r = parts.get("arm_right_upper")
-    fore_l = parts.get("forearm_left")
-    fore_r = parts.get("forearm_right")
-    thigh_l = parts.get("thigh_left")
-    thigh_r = parts.get("thigh_right")
-    leg_l = parts.get("leg_lower_left")
-    leg_r = parts.get("leg_lower_right")
+    arm_l = parts.get(SCREEN_LEFT_PARTS["upper_arm"])
+    arm_r = parts.get(SCREEN_RIGHT_PARTS["upper_arm"])
+    fore_l = parts.get(SCREEN_LEFT_PARTS["forearm"])
+    fore_r = parts.get(SCREEN_RIGHT_PARTS["forearm"])
+    thigh_l = parts.get(SCREEN_LEFT_PARTS["thigh"])
+    thigh_r = parts.get(SCREEN_RIGHT_PARTS["thigh"])
+    leg_l = parts.get(SCREEN_LEFT_PARTS["lower_leg"])
+    leg_r = parts.get(SCREEN_RIGHT_PARTS["lower_leg"])
 
     bw, bh = body.size if body else (100, 150)
 
@@ -160,18 +164,20 @@ def compute_limb_points(pose: RigPose, bind: dict):
     return pts, angles
 
 
+# (bone, joint it hangs from, sheet slot to draw, z-order). "left"/"right" here are screen
+# sides; SCREEN_*_PARTS maps them onto the blueprint's anatomical part names.
 BONE_ORDER = [
-    ("thigh_right", "hip_right", "thigh_right", 10),
-    ("lower_leg_right", "knee_right", "leg_lower_right", 11),
-    ("thigh_left", "hip_left", "thigh_left", 20),
-    ("lower_leg_left", "knee_left", "leg_lower_left", 21),
+    ("thigh_right", "hip_right", SCREEN_RIGHT_PARTS["thigh"], 10),
+    ("lower_leg_right", "knee_right", SCREEN_RIGHT_PARTS["lower_leg"], 11),
+    ("thigh_left", "hip_left", SCREEN_LEFT_PARTS["thigh"], 20),
+    ("lower_leg_left", "knee_left", SCREEN_LEFT_PARTS["lower_leg"], 21),
     ("torso", "pelvis", "body", 30),
-    ("upper_arm_left", "shoulder_left", "arm_left_upper", 40),
-    ("forearm_left", "elbow_left", "forearm_left", 41),
+    ("upper_arm_left", "shoulder_left", SCREEN_LEFT_PARTS["upper_arm"], 40),
+    ("forearm_left", "elbow_left", SCREEN_LEFT_PARTS["forearm"], 41),
     ("hand_left", "wrist_left", "__left_hand__", 42),
     ("head", "neck", "__head__", 50),
-    ("upper_arm_right", "shoulder_right", "arm_right_upper", 60),
-    ("forearm_right", "elbow_right", "forearm_right", 61),
+    ("upper_arm_right", "shoulder_right", SCREEN_RIGHT_PARTS["upper_arm"], 60),
+    ("forearm_right", "elbow_right", SCREEN_RIGHT_PARTS["forearm"], 61),
     ("hand_right", "wrist_right", "__right_hand__", 62),
 ]
 
@@ -239,6 +245,15 @@ class CharacterRenderer:
         paste_y = int(wy - pivot_px[1])
         canvas.alpha_composite(rotated, (paste_x, paste_y))
 
+    def _pick_hand(self, preferred: str, variants: list):
+        sprite = self.parts.get(preferred)
+        if sprite is not None:
+            return sprite
+        for name in variants:
+            if name in self.parts:
+                return self.parts[name]
+        return None
+
     def draw(self, canvas, pose: RigPose, mouth_shape: str):
         pts, angles = compute_limb_points(pose, self.bind)
         for bone_name, start_joint, slot, _z in BONE_ORDER:
@@ -249,11 +264,12 @@ class CharacterRenderer:
                 sprite = self._head_with_mouth(head_slot, mouth_shape)
                 pivot = (0.5, 1.0)
             elif slot == "__left_hand__":
-                sprite = self.parts.get(pose.selectedLeftHand) or self.parts.get("hand_left")
-                pivot = get_pivot("hand_left", sprite) if sprite else (0.5, 0.0)
+                # screen-left hand shows the character's RIGHT palm art
+                sprite = self._pick_hand(pose.selectedRightHand, HAND_VARIANTS_SCREEN_LEFT)
+                pivot = get_pivot("right_palm_1", sprite) if sprite else (0.5, 0.0)
             elif slot == "__right_hand__":
-                sprite = self.parts.get(pose.selectedRightHand) or self.parts.get("hand_right")
-                pivot = get_pivot("hand_right", sprite) if sprite else (0.5, 0.0)
+                sprite = self._pick_hand(pose.selectedLeftHand, HAND_VARIANTS_SCREEN_RIGHT)
+                pivot = get_pivot("left_palm_1", sprite) if sprite else (0.5, 0.0)
             else:
                 sprite = self.parts.get(slot)
                 pivot = get_pivot(slot, sprite) if sprite else (0.5, 0.0)

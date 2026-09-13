@@ -1,49 +1,63 @@
 """
-Fixed-layout template for the character master-sheet format the user always uses.
-Coordinates below were measured directly off the user's own labeled blueprint/legend
-sheet (2048x2048) — each named cell's exact normalized bounding box — so slicing is a
-direct crop against known ground truth, not a guess. forearm_left/forearm_right are
-not part of the legend itself (the legend only shows one "arm" segment per side) but
-real production sheets do draw the forearm as its own piece between "arm" and "hand";
-its position is estimated from two real reference sheets and kept generous.
+The character sheet layout, measured 1:1 off the user's own labelled blueprint.
+
+Every sheet follows this exact grid: each named cell is a fixed rectangle and the
+artist draws that one part inside it. So slicing is not a guess — a part is whatever
+sits inside its cell. Verified against two real sheets at different resolutions
+(2048px and 4096px): every cell resolved to exactly one piece of art, with nothing
+left over.
+
+Rectangles are normalized (x0, y0, x1, y1) against the sheet's own width/height, so
+they hold at any resolution. Names are the blueprint's own labels, which are
+anatomical: "right" means the CHARACTER's right, which appears on the viewer's left.
 """
 
-# slot_id -> (center_x, center_y, box_w, box_h) normalized 0..1, with generous padding
-STRUCTURAL_SLOTS = {
-    "body": (0.4478, 0.2266, 0.3200, 0.4700),
-    # NOTE: the blueprint legend's own text labels this pair the other way round, but the
-    # two real production sheets checked both draw eyes-open in the UPPER cell and
-    # eyes-closed in the LOWER cell — verified by opening both crops directly, not assumed.
-    "head_eyes_opened": (0.1091, 0.7327, 0.2250, 0.1850),
-    "head_eyes_closed": (0.1094, 0.9106, 0.2250, 0.1850),
-    "arm_left_upper": (0.4839, 0.6860, 0.1850, 0.2200),
-    "arm_right_upper": (0.3093, 0.6860, 0.1900, 0.2200),
-    "thigh_left": (0.9133, 0.4866, 0.1850, 0.1950),
-    "thigh_right": (0.9133, 0.0959, 0.1850, 0.1950),
-    "leg_lower_left": (0.9143, 0.6829, 0.1850, 0.2200),
-    "leg_lower_right": (0.9143, 0.2908, 0.1850, 0.2200),
-    # forearm: not in the legend, estimated between "arm" and "hand" cells from real sheets
-    "forearm_left": (0.4695, 0.8571, 0.1300, 0.1400),
-    "forearm_right": (0.3097, 0.8763, 0.1300, 0.1400),
-    # default neutral hand (elbow-down)
-    "hand_left": (0.4670, 0.8960, 0.1800, 0.2150),
-    "hand_right": (0.3010, 0.8960, 0.1800, 0.2150),
-    # alternate hand/gesture variants — exact identities from the legend, not a guessed pool
-    "left_palm_3": (0.6855, 0.6865, 0.2350, 0.2150),
-    "left_palm_2": (0.6616, 0.8950, 0.2350, 0.2150),
-    "left_palm_1": (0.8862, 0.8950, 0.2350, 0.2150),
-    "right_palm_3": (0.7168, 0.0999, 0.2400, 0.2050),
-    "right_palm_2": (0.7168, 0.2927, 0.2400, 0.2050),
-    "right_palm_1": (0.7168, 0.4875, 0.2400, 0.2050),
-    "right_hand_prop": (0.1462, 0.1343, 0.3100, 0.2800),
-    # optional finer eye detail (only used if a sheet provides separate eye parts)
-    "eye_background": (0.3728, 0.5168, 0.1600, 0.1350),
-    "eye_balls": (0.5244, 0.5168, 0.1600, 0.1350),
+# slot -> (x0, y0, x1, y1) normalized 0..1
+CELLS = {
+    "right_hand_prop":  (0.0039, 0.0049, 0.2886, 0.2637),   # "right hand palm holding prop -2"
+    "body":             (0.2993, 0.0000, 0.5962, 0.4502),
+    "right_palm_3":     (0.6074, 0.0068, 0.8262, 0.1929),
+    "thigh_right":      (0.8325, 0.0059, 0.9941, 0.1831),
+    "right_palm_2":     (0.6074, 0.2002, 0.8262, 0.3853),
+    "leg_lower_right":  (0.8340, 0.1909, 0.9946, 0.3906),
+    "mouth_shape_1":    (0.0039, 0.2725, 0.1113, 0.3574),
+    "left_hand_prop":   (0.1191, 0.2744, 0.2905, 0.5728),   # unlabelled cell, mirrors the right prop
+    "mouth_shape_2":    (0.0039, 0.3647, 0.1113, 0.4497),
+    "right_palm_1":     (0.6074, 0.3950, 0.8262, 0.5801),
+    "thigh_left":       (0.8325, 0.3979, 0.9941, 0.5752),
+    "mouth_shape_3":    (0.0044, 0.4575, 0.1123, 0.5420),
+    "eye_background":   (0.3018, 0.4590, 0.4438, 0.5747),
+    "eye_balls":        (0.4536, 0.4590, 0.5952, 0.5747),
+    "mouth_shape_4":    (0.0039, 0.5498, 0.1113, 0.6343),
+    "arm_right":        (0.2261, 0.5845, 0.3892, 0.7876),
+    "arm_left":         (0.4023, 0.5845, 0.5654, 0.7876),
+    "left_palm_3":      (0.5776, 0.5869, 0.7935, 0.7861),
+    "leg_lower_left":   (0.8340, 0.5830, 0.9946, 0.7822),
+    "head_eyes_closed": (0.0054, 0.6484, 0.2129, 0.8164),
+    "hand_right":       (0.2227, 0.7969, 0.3794, 0.9951),
+    "hand_left":        (0.3887, 0.7969, 0.5454, 0.9951),
+    "left_palm_2":      (0.5537, 0.7964, 0.7695, 0.9941),
+    "left_palm_1":      (0.7783, 0.7964, 0.9941, 0.9946),
+    "head_eyes_opened": (0.0054, 0.8267, 0.2129, 0.9946),
 }
 
-# Region where the 4 stacked mouth/viseme shapes live — openness is measured per-sheet
-# (by alpha pixel area) rather than assumed by position, since intensity ordering isn't
-# guaranteed to be identical across every sheet.
-MOUTH_REGION = (0.02, 0.28, 0.14, 0.62)  # xmin, ymin, xmax, ymax normalized
+MOUTH_SLOTS = ["mouth_shape_1", "mouth_shape_2", "mouth_shape_3", "mouth_shape_4"]
 
-MAX_MATCH_DISTANCE = 0.08  # normalized centroid distance beyond which a blob is not considered a match
+# The blueprint's "arm"/"hand" pair is upper arm + forearm; the palms are the hands.
+# A front-facing character's right side is drawn on the viewer's left, so the screen-left
+# bone chain takes the "right_*" art and vice versa.
+SCREEN_LEFT_PARTS = {
+    "upper_arm": "arm_right",
+    "forearm": "hand_right",
+    "thigh": "thigh_right",
+    "lower_leg": "leg_lower_right",
+}
+SCREEN_RIGHT_PARTS = {
+    "upper_arm": "arm_left",
+    "forearm": "hand_left",
+    "thigh": "thigh_left",
+    "lower_leg": "leg_lower_left",
+}
+
+HAND_VARIANTS_SCREEN_LEFT = ["right_palm_1", "right_palm_2", "right_palm_3", "right_hand_prop"]
+HAND_VARIANTS_SCREEN_RIGHT = ["left_palm_1", "left_palm_2", "left_palm_3", "left_hand_prop"]
