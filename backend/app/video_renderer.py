@@ -104,8 +104,11 @@ def build_geometry(parts: dict) -> dict:
     fore_r_len = fore_r.height * 0.78 if fore_r else bh * 0.28
     wrist_right = (elbow_right[0], elbow_right[1] + fore_r_len)
 
-    hand_left = (wrist_left[0], wrist_left[1] + fore_l_len * 0.04)
-    hand_right = (wrist_right[0], wrist_right[1] + fore_r_len * 0.04)
+    # Pull the hand back up over the forearm's own end a little: both pieces are cut with
+    # a rounded wrist edge, so butting them together shows two bumps side by side instead
+    # of one — the hand needs to sit far enough onto the forearm to cover its cut edge.
+    hand_left = (wrist_left[0], wrist_left[1] - fore_l_len * 0.12)
+    hand_right = (wrist_right[0], wrist_right[1] - fore_r_len * 0.12)
 
     thigh_l_len = thigh_l.height * 0.72 if thigh_l else 0.0
     knee_left = (hip_left[0], hip_left[1] + thigh_l_len)
@@ -325,11 +328,14 @@ class CharacterRenderer:
                 sprite = self._head_with_mouth(head_slot, mouth_shape)
                 pivot = (0.5, 1.0)
             elif slot == "__left_hand__":
-                # screen-left hand shows the character's RIGHT palm art
-                sprite = self._pick_hand(pose.selectedRightHand, HAND_VARIANTS_SCREEN_LEFT)
+                # pose.selectedLeftHand/rightHand are screen-side (they pair with
+                # leftArmUpperRot/rightArmUpperRot, which drive this same bone's rotation
+                # below) — HAND_VARIANTS_SCREEN_LEFT is what maps that screen side onto the
+                # blueprint's anatomical part names.
+                sprite = self._pick_hand(pose.selectedLeftHand, HAND_VARIANTS_SCREEN_LEFT)
                 pivot = get_pivot("right_palm_1", sprite) if sprite else (0.5, 0.0)
             elif slot == "__right_hand__":
-                sprite = self._pick_hand(pose.selectedLeftHand, HAND_VARIANTS_SCREEN_RIGHT)
+                sprite = self._pick_hand(pose.selectedRightHand, HAND_VARIANTS_SCREEN_RIGHT)
                 pivot = get_pivot("left_palm_1", sprite) if sprite else (0.5, 0.0)
             else:
                 sprite = self.parts.get(slot)
