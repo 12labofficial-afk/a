@@ -64,10 +64,12 @@ HAND_SLOTS = {
 
 def _detect_wrist_pivot(img: Image.Image):
     """
-    Hands are wide at the palm/fingers and narrow at the wrist. Finds whichever end
-    (along the image's longer axis) has the smaller average cross-section, then returns the
-    actual pixel centroid of that narrow end (not just the edge midpoint) as the pivot, so a
-    wrist sitting off to one side of that end is still located correctly.
+    The wrist attaches where the hand is a single solid mass (the palm/heel of the
+    hand) — that end has a HIGH average cross-section. Splayed or pointing fingers
+    make the opposite end of the blob read as sparse/narrow (gaps between fingers,
+    or just one finger's width), even though that end is not the attachment point.
+    So the pivot is the pixel centroid of whichever end (along the image's longer
+    axis) has the LARGER average cross-section, not the smaller one.
     """
     import numpy as np
 
@@ -85,12 +87,12 @@ def _detect_wrist_pivot(img: Image.Image):
     if w >= h:
         profile = alpha.sum(axis=0)
         q = max(1, w // 4)
-        if profile[:q].mean() < profile[-q:].mean():
+        if profile[:q].mean() > profile[-q:].mean():
             return centroid_of(alpha[:, :q], 0, 0) or (0.03, 0.5)
         return centroid_of(alpha[:, -q:], w - q, 0) or (0.97, 0.5)
     profile = alpha.sum(axis=1)
     q = max(1, h // 4)
-    if profile[:q].mean() < profile[-q:].mean():
+    if profile[:q].mean() > profile[-q:].mean():
         return centroid_of(alpha[:q, :], 0, 0) or (0.5, 0.03)
     return centroid_of(alpha[-q:, :], 0, h - q) or (0.5, 0.97)
 
