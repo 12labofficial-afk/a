@@ -11,6 +11,23 @@ def _natural_key(name: str):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
 
 
+def extract_bundle(bundle_zip_path: str, out_dir: str):
+    """
+    The tool's own export format: one zip holding both `json.json` (the project) and the
+    numbered/named audio files ("001-अमित.wav", ...) side by side. Returns
+    (project_json_str, chunk_paths) — chunk_paths naturally sorted, matching dialogue order.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    with zipfile.ZipFile(bundle_zip_path) as zf:
+        json_name = next((n for n in zf.namelist() if os.path.basename(n).lower() == "json.json"), None)
+        if json_name is None:
+            raise ValueError("Bundle zip me json.json nahi mila.")
+        project_json_str = zf.read(json_name).decode("utf-8")
+
+    chunk_paths = extract_audio_chunks(bundle_zip_path, out_dir)
+    return project_json_str, chunk_paths
+
+
 def extract_audio_chunks(zip_path: str, out_dir: str) -> list:
     """Extracts audio files from the zip, naturally sorted (matching dialogue/timeline order)."""
     os.makedirs(out_dir, exist_ok=True)

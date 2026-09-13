@@ -2,7 +2,7 @@ import math
 import os
 import subprocess
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from app.rig_pose import calculate_rig_pose, RigPose
 from app.rig_assets import get_pivot
@@ -11,36 +11,49 @@ from app.sheet_template import (
     HAND_VARIANTS_SCREEN_LEFT, HAND_VARIANTS_SCREEN_RIGHT,
 )
 
-FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-    "/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-]
-
-
-def _load_font(size: int):
-    for path in FONT_CANDIDATES:
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-    return ImageFont.load_default()
-
-
 def rotate_vec(dx, dy, angle_deg):
     a = math.radians(angle_deg)
     c, s = math.cos(a), math.sin(a)
     return (dx * c - dy * s, dx * s + dy * c)
 
 
+def _body_landmarks(body: Image.Image):
+    """
+    Reads the neck, shoulder line and hip width off the torso art itself.
+
+    The torso is drawn with a bare neck stub on top, and how tall that stub is varies a
+    lot between characters, so the head has to attach where the shoulders actually start
+    rather than at a fixed fraction of the sprite.
+    """
+    alpha = np.array(body.split()[-1]) > 10
+    h, w = alpha.shape
+    widths = alpha.sum(axis=1)
+    if widths.max() == 0:
+        return None
+
+    filled = np.nonzero(widths > 0)[0]
+    top, bottom = int(filled[0]), int(filled[-1])
+    # the first row that widens out of the neck stub into the shoulders
+    shoulder_row = max(int(np.argmax(widths >= 0.55 * widths.max())), top + 1)
+
+    def half_width(row):
+        row = min(max(int(row), 0), h - 1)
+        xs = np.nonzero(alpha[row])[0]
+        return (xs.max() - xs.min()) / 2 if len(xs) else widths.max() / 2
+
+    return {
+        "h": h, "w": w, "top": top, "bottom": bottom, "shoulder_row": shoulder_row,
+        "shoulder_half": half_width(shoulder_row + 0.03 * h),
+        "hip_half": half_width(bottom - 0.05 * h),
+    }
+
+
 def build_geometry(parts: dict) -> dict:
     """
     Derives per-character bind-pose joint positions (native pixel units, pelvis at origin)
-    directly from each part's own pixel size, since hand-drawn/scattered-sheet rigs have
-    wildly different proportions between characters and a single shared abstract skeleton
-    does not fit them all.
+    from the art itself — torso landmarks for the neck/shoulders/hips, and each limb
+    sprite's own length for the joints below them. Hand-drawn characters differ too much
+    in proportion for one shared skeleton to fit them all.
     """
     body = parts.get("body")
     head = parts.get("head_eyes_opened") or parts.get("head_eyes_closed")
@@ -54,33 +67,49 @@ def build_geometry(parts: dict) -> dict:
     leg_r = parts.get(SCREEN_RIGHT_PARTS["lower_leg"])
 
     bw, bh = body.size if body else (100, 150)
+    lm = _body_landmarks(body) if body else None
 
+    # A sprite row r maps to bind y = r - bh, since the torso hangs from its bottom edge.
     pelvis = (0.0, 0.0)
-    neck = (0.0, -bh * 0.94)
-    shoulder_left = (-bw * 0.36, -bh * 0.88)
-    shoulder_right = (bw * 0.36, -bh * 0.88)
-    hip_left = (-bw * 0.20, -bh * 0.04)
-    hip_right = (bw * 0.20, -bh * 0.04)
+    if lm:
+        # leave a quarter of the neck stub showing; the head covers the rest of it
+        neck_row = lm["shoulder_row"] - 0.25 * (lm["shoulder_row"] - lm["top"])
+        neck = (0.0, neck_row - bh)
+        shoulder_y = lm["shoulder_row"] + 0.04 * bh - bh
+        shoulder_x = 0.78 * lm["shoulder_half"]
+        hip_y = lm["bottom"] - 0.10 * bh - bh
+        hip_x = 0.45 * lm["hip_half"]
+    else:
+        neck = (0.0, -bh * 0.88)
+        shoulder_y, shoulder_x = -bh * 0.80, bw * 0.36
+        hip_y, hip_x = -bh * 0.10, bw * 0.20
+
+    shoulder_left = (-shoulder_x, shoulder_y)
+    shoulder_right = (shoulder_x, shoulder_y)
+    hip_left = (-hip_x, hip_y)
+    hip_right = (hip_x, hip_y)
 
     head_h = head.height * 0.92 if head else bh * 0.5
     head_top = (neck[0], neck[1] - head_h)
 
-    arm_l_len = arm_l.height * 0.82 if arm_l else bh * 0.3
+    # Each piece is shortened a little against its own art so the next one down overlaps
+    # it and hides the cut edge, instead of the two just meeting and showing a seam.
+    arm_l_len = arm_l.height * 0.75 if arm_l else bh * 0.3
     elbow_left = (shoulder_left[0], shoulder_left[1] + arm_l_len)
-    arm_r_len = arm_r.height * 0.82 if arm_r else bh * 0.3
+    arm_r_len = arm_r.height * 0.75 if arm_r else bh * 0.3
     elbow_right = (shoulder_right[0], shoulder_right[1] + arm_r_len)
 
-    fore_l_len = fore_l.height * 0.82 if fore_l else bh * 0.28
+    fore_l_len = fore_l.height * 0.78 if fore_l else bh * 0.28
     wrist_left = (elbow_left[0], elbow_left[1] + fore_l_len)
-    fore_r_len = fore_r.height * 0.82 if fore_r else bh * 0.28
+    fore_r_len = fore_r.height * 0.78 if fore_r else bh * 0.28
     wrist_right = (elbow_right[0], elbow_right[1] + fore_r_len)
 
     hand_left = (wrist_left[0], wrist_left[1] + fore_l_len * 0.04)
     hand_right = (wrist_right[0], wrist_right[1] + fore_r_len * 0.04)
 
-    thigh_l_len = thigh_l.height * 0.82 if thigh_l else 0.0
+    thigh_l_len = thigh_l.height * 0.72 if thigh_l else 0.0
     knee_left = (hip_left[0], hip_left[1] + thigh_l_len)
-    thigh_r_len = thigh_r.height * 0.82 if thigh_r else 0.0
+    thigh_r_len = thigh_r.height * 0.72 if thigh_r else 0.0
     knee_right = (hip_right[0], hip_right[1] + thigh_r_len)
 
     leg_l_len = leg_l.height * 0.82 if leg_l else bh * 0.35
@@ -192,6 +221,37 @@ class CharacterRenderer:
         self.screen_anchor = (x_px, ground_y_px - feet_offset_px)
         self.facing = facing
         self._mouth_cache = {}
+        self._face_cache = None
+
+    def _face_anchor(self):
+        """
+        Where the mouth belongs on the head, as fractions of the head crop.
+
+        The two head variants differ only at the eyes, so diffing them locates the eye
+        line and the face's centre; the mouth then sits most of the way down from there
+        to the chin. A fixed fraction of the crop can't work — how much hair sits above
+        the face varies wildly between characters, which is what pushed the nurse's
+        mouth onto her jaw.
+        """
+        if self._face_cache is not None:
+            return self._face_cache
+
+        anchor = (0.5, 0.82)
+        a = self.parts.get("head_eyes_opened")
+        b = self.parts.get("head_eyes_closed")
+        if a is not None and b is not None:
+            size = (max(a.width, b.width), max(a.height, b.height))
+            ga = np.array(a.convert("L").resize(size, Image.BILINEAR)).astype(float)
+            gb = np.array(b.convert("L").resize(size, Image.BILINEAR)).astype(float)
+            changed = np.abs(ga - gb) > 25
+            rows = np.nonzero(np.array(a.split()[-1].resize(size, Image.BILINEAR)) > 10)[0]
+            if changed.sum() > 20 and len(rows):
+                ys, xs = np.nonzero(changed)
+                eye_y, chin_y = ys.mean(), rows.max()
+                anchor = (xs.mean() / size[0], (eye_y + 0.58 * (chin_y - eye_y)) / size[1])
+
+        self._face_cache = anchor
+        return anchor
 
     def _head_with_mouth(self, head_slot: str, mouth_shape: str):
         key = (head_slot, mouth_shape)
@@ -206,7 +266,8 @@ class CharacterRenderer:
         if mouth is not None:
             mw, mh = mouth.size
             hw, hh = head.size
-            pos = (int(hw * 0.5 - mw * 0.5), int(hh * 0.87 - mh * 0.5))
+            fx, fy = self._face_anchor()
+            pos = (int(hw * fx - mw * 0.5), int(hh * fy - mh * 0.5))
             composed.paste(mouth, pos, mouth)
         self._mouth_cache[key] = composed
         return composed
@@ -297,22 +358,6 @@ def apply_camera(frame: Image.Image, scale: float, focus_x_frac: float):
     return cropped.resize((w, h), Image.LANCZOS)
 
 
-def draw_subtitle(canvas: Image.Image, character: str, line: str, w: int, h: int):
-    draw = ImageDraw.Draw(canvas)
-    box_h = int(h * 0.16)
-    box_y = h - box_h - int(h * 0.03)
-    box_w = int(w * 0.9)
-    box_x = (w - box_w) // 2
-    draw.rounded_rectangle([box_x, box_y, box_x + box_w, box_y + box_h], radius=14, fill=(10, 10, 10, 220))
-
-    name_font = _load_font(int(h * 0.032))
-    line_font = _load_font(int(h * 0.034))
-    draw.text((box_x + 20, box_y + 14), character, font=name_font, fill=(255, 200, 80, 255))
-    max_chars = max(20, int(box_w / (h * 0.02)))
-    wrapped = line if len(line) <= max_chars else line[: max_chars - 1] + "…"
-    draw.text((box_x + 20, box_y + int(box_h * 0.5)), wrapped, font=line_font, fill=(255, 255, 255, 255))
-
-
 def render_video(
     project,
     dialogue_audios: list,
@@ -368,7 +413,6 @@ def render_video(
         active_char = None
         camera_scale = 1.0
         focus_frac = 0.5
-        active_line = None
         if active_i >= 0:
             dlg = project.dialogues[active_i]
             active_char = dlg.character
@@ -376,7 +420,6 @@ def render_video(
             camera_scale = CAMERA_PRESETS.get(choreo["cameraShot"], 1.0)
             renderer = renderers.get(active_char)
             focus_frac = renderer.name_x_frac if renderer else 0.5
-            active_line = (dlg.character, dlg.line)
 
         for name, renderer in renderers.items():
             if name == active_char:
@@ -394,10 +437,6 @@ def render_video(
 
         frame_rgb = canvas.convert("RGB")
         frame_rgb = apply_camera(frame_rgb, camera_scale, focus_frac)
-        if active_line:
-            frame_rgb = frame_rgb.convert("RGBA")
-            draw_subtitle(frame_rgb, active_line[0], active_line[1], width, height)
-            frame_rgb = frame_rgb.convert("RGB")
 
         arr = np.asarray(frame_rgb, dtype=np.uint8)
         proc.stdin.write(arr.tobytes())

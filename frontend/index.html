@@ -90,15 +90,19 @@
     </div>
 
     <div class="card">
-      <h2><span class="step-badge">2</span>Project JSON</h2>
-      <small>Dialogues + timeline + voiceAssignments wala JSON.</small>
-      <input type="file" id="projectJson" accept=".json" />
-    </div>
+      <h2><span class="step-badge">2</span>Script + Audio Bundle</h2>
+      <small>Studio ka export zip — json.json aur numbered audio files (001-नाम.wav, ...) ek hi zip me.</small>
+      <input type="file" id="bundleZip" accept=".zip" />
 
-    <div class="card">
-      <h2><span class="step-badge">3</span>Audio ZIP</h2>
-      <small>Timeline ke hisaab se tute hue per-dialogue audio chunks (naturally sorted).</small>
-      <input type="file" id="audioZip" accept=".zip" />
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer;color:#94a3b8;font-size:0.85rem">JSON aur audio alag-alag files hain?</summary>
+        <div style="margin-top:10px">
+          <label>Project JSON</label>
+          <input type="file" id="projectJson" accept=".json" />
+          <label style="margin-top:8px">Audio ZIP</label>
+          <input type="file" id="audioZip" accept=".zip" />
+        </div>
+      </details>
 
       <div class="row" style="margin-top:14px">
         <div>

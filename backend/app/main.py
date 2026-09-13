@@ -27,34 +27,57 @@ def health():
 
 @app.post("/api/jobs")
 async def create_job(
-    project_json: UploadFile = File(...),
-    audio_zip: UploadFile = File(...),
     characters_zip: UploadFile = File(...),
+    bundle_zip: UploadFile = File(None),
+    project_json: UploadFile = File(None),
+    audio_zip: UploadFile = File(None),
     fps: int = Form(config.VIDEO_FPS),
     width: int = Form(config.VIDEO_WIDTH),
     height: int = Form(config.VIDEO_HEIGHT),
 ):
+    """
+    Two ways to supply the script + audio:
+      - `bundle_zip`: the tool's own export — one zip holding json.json plus the numbered
+        audio files together. This is the normal case.
+      - `project_json` + `audio_zip`: the same two things uploaded separately.
+    """
     job_id = jobs.create_job()
     jdir = jobs._job_dir(job_id)
-
-    project_bytes = await project_json.read()
-    project_json_str = project_bytes.decode("utf-8")
-
-    audio_zip_path = os.path.join(jdir, "audio.zip")
-    with open(audio_zip_path, "wb") as f:
-        f.write(await audio_zip.read())
 
     characters_zip_path = os.path.join(jdir, "characters.zip")
     with open(characters_zip_path, "wb") as f:
         f.write(await characters_zip.read())
 
-    try:
-        from app.schemas import ProjectJson
-        ProjectJson.model_validate_json(project_json_str)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid project JSON: {e}")
+    bundle_zip_path = None
+    project_json_str = None
+    audio_zip_path = None
 
-    jobs.start_job(job_id, project_json_str, audio_zip_path, characters_zip_path, fps, width, height)
+    if bundle_zip is not None and bundle_zip.filename:
+        bundle_zip_path = os.path.join(jdir, "bundle.zip")
+        with open(bundle_zip_path, "wb") as f:
+            f.write(await bundle_zip.read())
+    elif project_json is not None and audio_zip is not None:
+        project_json_str = (await project_json.read()).decode("utf-8")
+        audio_zip_path = os.path.join(jdir, "audio.zip")
+        with open(audio_zip_path, "wb") as f:
+            f.write(await audio_zip.read())
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Ya toh bundle_zip do (json.json + audio ek saath), ya project_json aur audio_zip dono alag-alag.",
+        )
+
+    if project_json_str is not None:
+        try:
+            from app.schemas import ProjectJson
+            ProjectJson.model_validate_json(project_json_str)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid project JSON: {e}")
+
+    jobs.start_job(
+        job_id, characters_zip_path, fps, width, height,
+        bundle_zip_path=bundle_zip_path, project_json_str=project_json_str, audio_zip_path=audio_zip_path,
+    )
     return {"job_id": job_id}
 
 

@@ -8,7 +8,7 @@ import zipfile
 
 from app import config, llm
 from app.schemas import ProjectJson, JobStatus
-from app.audio_utils import extract_audio_chunks, DialogueAudio, build_combined_audio_track
+from app.audio_utils import extract_audio_chunks, extract_bundle, DialogueAudio, build_combined_audio_track
 from app.rig_assets import load_character_parts
 from app.video_renderer import render_video
 
@@ -44,27 +44,32 @@ def video_path(job_id: str) -> str:
     return os.path.join(_job_dir(job_id), "output.mp4")
 
 
-def start_job(job_id: str, project_json_str: str, audio_zip_path: str, characters_zip_path: str, fps: int, width: int, height: int):
+def start_job(job_id: str, characters_zip_path: str, fps: int, width: int, height: int,
+              bundle_zip_path: str = None, project_json_str: str = None, audio_zip_path: str = None):
     thread = threading.Thread(
         target=_run_job,
-        args=(job_id, project_json_str, audio_zip_path, characters_zip_path, fps, width, height),
+        args=(job_id, characters_zip_path, fps, width, height, bundle_zip_path, project_json_str, audio_zip_path),
         daemon=True,
     )
     thread.start()
 
 
-def _run_job(job_id, project_json_str, audio_zip_path, characters_zip_path, fps, width, height):
+def _run_job(job_id, characters_zip_path, fps, width, height,
+             bundle_zip_path=None, project_json_str=None, audio_zip_path=None):
     jdir = _job_dir(job_id)
     try:
-        _update(job_id, state="processing", progress=2, message="JSON parse ho raha hai...")
-        project = ProjectJson.model_validate_json(project_json_str)
-
-        _update(job_id, progress=5, message="Audio zip se dialogue chunks nikale ja rahe hain...")
         audio_dir = os.path.join(jdir, "audio_chunks")
-        chunk_paths = extract_audio_chunks(audio_zip_path, audio_dir)
-        if len(chunk_paths) != len(project.dialogues):
-            n = min(len(chunk_paths), len(project.dialogues))
-            chunk_paths = chunk_paths[:n]
+
+        if bundle_zip_path:
+            _update(job_id, state="processing", progress=2, message="Bundle zip se JSON aur audio nikale ja rahe hain...")
+            project_json_str, chunk_paths = extract_bundle(bundle_zip_path, audio_dir)
+        else:
+            _update(job_id, state="processing", progress=2, message="JSON parse ho raha hai...")
+            _update(job_id, progress=5, message="Audio zip se dialogue chunks nikale ja rahe hain...")
+            chunk_paths = extract_audio_chunks(audio_zip_path, audio_dir)
+
+        project = ProjectJson.model_validate_json(project_json_str)
+        chunk_paths = chunk_paths[: len(project.dialogues)]
 
         _update(job_id, progress=10, message="Har audio chunk ka amplitude envelope compute ho raha hai (lip-sync)...")
         dialogue_audios = []

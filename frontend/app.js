@@ -88,6 +88,7 @@ generateBtn.addEventListener("click", async () => {
   resultVideo.style.display = "none";
   resultVideo.src = "";
 
+  const bundleZip = document.getElementById("bundleZip").files[0];
   const projectJson = document.getElementById("projectJson").files[0];
   const audioZip = document.getElementById("audioZip").files[0];
 
@@ -95,8 +96,8 @@ generateBtn.addEventListener("click", async () => {
     errBox.textContent = "Har character ka naam aur sheet PNG dono chahiye.";
     return;
   }
-  if (!projectJson || !audioZip) {
-    errBox.textContent = "Project JSON aur audio ZIP dono upload karo.";
+  if (!bundleZip && !(projectJson && audioZip)) {
+    errBox.textContent = "Ya toh Studio bundle zip do, ya Project JSON + Audio ZIP dono alag-alag.";
     return;
   }
 
@@ -114,8 +115,12 @@ generateBtn.addEventListener("click", async () => {
     const charactersZipBlob = await zip.generateAsync({ type: "blob" });
 
     const form = new FormData();
-    form.append("project_json", projectJson);
-    form.append("audio_zip", audioZip);
+    if (bundleZip) {
+      form.append("bundle_zip", bundleZip);
+    } else {
+      form.append("project_json", projectJson);
+      form.append("audio_zip", audioZip);
+    }
     form.append("characters_zip", charactersZipBlob, "characters.zip");
     form.append("width", document.getElementById("width").value);
     form.append("height", document.getElementById("height").value);
