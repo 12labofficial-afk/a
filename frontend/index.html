@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Script to Animation Studio</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(135deg, #0f172a, #1e1b4b);
+      color: #f1f5f9; min-height: 100vh; padding: 24px 16px;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 1.6rem; margin-bottom: 4px; }
+    p.sub { color: #94a3b8; margin-top: 0; margin-bottom: 28px; }
+    .card {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px; padding: 20px; margin-bottom: 18px;
+    }
+    label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.92rem; }
+    small { display: block; color: #94a3b8; margin-bottom: 10px; font-size: 0.8rem; }
+    input[type=file], input[type=number] {
+      width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155;
+      background: #0f172a; color: #f1f5f9; margin-bottom: 4px;
+    }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    button {
+      width: 100%; padding: 14px; font-size: 1rem; font-weight: 700;
+      background: linear-gradient(135deg, #f97316, #ea580c); color: white;
+      border: none; border-radius: 10px; cursor: pointer; margin-top: 8px;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status { margin-top: 16px; }
+    .bar-bg { background: #1e293b; border-radius: 8px; overflow: hidden; height: 22px; }
+    .bar-fill {
+      height: 100%; background: linear-gradient(90deg, #22c55e, #16a34a);
+      width: 0%; transition: width 0.3s; display: flex; align-items: center;
+      justify-content: center; font-size: 0.75rem; font-weight: 700;
+    }
+    #msg { margin-top: 8px; color: #cbd5e1; font-size: 0.9rem; }
+    video { width: 100%; border-radius: 12px; margin-top: 16px; display: none; }
+    .err { color: #f87171; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🎬 AI Script → 2D Animation Studio</h1>
+    <p class="sub">JSON script + audio zip + character rig upload karo, AI khud animation choreograph karega — har dialogue ke liye ek call.</p>
+
+    <div class="card">
+      <label>1. Project JSON (dialogues + timeline + voiceAssignments)</label>
+      <small>Wahi JSON jisme characterSettings, dialogues, timeline hota hai.</small>
+      <input type="file" id="projectJson" accept=".json" />
+
+      <label>2. Audio ZIP (timeline ke hisaab se tute hue dialogue chunks)</label>
+      <small>Har dialogue ka apna audio file, natural order me sorted.</small>
+      <input type="file" id="audioZip" accept=".zip" />
+
+      <label>3. Characters ZIP</label>
+      <small>Har character ke naam ka folder, andar body-part PNGs (body, head, mouth_shape_1-4, arms, hands, legs).</small>
+      <input type="file" id="charactersZip" accept=".zip" />
+
+      <div class="row">
+        <div>
+          <label>Width</label>
+          <input type="number" id="width" value="1280" />
+        </div>
+        <div>
+          <label>Height</label>
+          <input type="number" id="height" value="720" />
+        </div>
+        <div>
+          <label>FPS</label>
+          <input type="number" id="fps" value="24" />
+        </div>
+      </div>
+
+      <button id="generateBtn">Animation Generate Karo</button>
+    </div>
+
+    <div id="status" style="display:none">
+      <div class="bar-bg"><div class="bar-fill" id="barFill">0%</div></div>
+      <div id="msg"></div>
+    </div>
+    <div id="errBox" class="err"></div>
+    <video id="resultVideo" controls></video>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
