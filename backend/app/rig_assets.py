@@ -95,6 +95,10 @@ def load_character_parts(folder: str) -> dict:
         atlas_file = atlas_candidates[0] if atlas_candidates else files[0]
         img = Image.open(os.path.join(folder, atlas_file)).convert("RGBA")
         if img.width >= 512 and img.height >= 512:
+            from app.rig_autoslice import auto_slice_sheet
+            parts = auto_slice_sheet(img)
+            if len(parts) >= 8:
+                return parts
             from app.rig_blueprint_atlas import slice_master_sheet
             return slice_master_sheet(img)
 

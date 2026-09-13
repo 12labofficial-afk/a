@@ -1,10 +1,12 @@
+import io
 import os
 import shutil
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
 
 from app import config, jobs
 
@@ -54,6 +56,37 @@ async def create_job(
 
     jobs.start_job(job_id, project_json_str, audio_zip_path, characters_zip_path, fps, width, height)
     return {"job_id": job_id}
+
+
+@app.post("/api/preview-character")
+async def preview_character(sheet: UploadFile = File(...)):
+    """Upload one character sheet PNG, get back a rendered preview + detected part count."""
+    from app.rig_autoslice import auto_slice_sheet
+    from app.video_renderer import render_character_preview
+
+    try:
+        raw = await sheet.read()
+        img = Image.open(io.BytesIO(raw))
+        parts = auto_slice_sheet(img)
+        if len(parts) < 3:
+            raise HTTPException(
+                status_code=422,
+                detail="Sheet me pehchane jaane layak parts nahi mile. Sheet transparent PNG honi chahiye "
+                       "aur usi fixed layout me (body/head/mouths/arms/legs scattered) honi chahiye.",
+            )
+        preview = render_character_preview(parts)
+        buf = io.BytesIO()
+        preview.save(buf, format="PNG")
+        detected = ",".join(sorted(parts.keys()))
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={"X-Detected-Parts": detected, "X-Part-Count": str(len(parts))},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Sheet process nahi ho payi: {e}")
 
 
 @app.get("/api/jobs/{job_id}")

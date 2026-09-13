@@ -4,34 +4,65 @@
   <meta charset="UTF-8" />
   <title>AI Script to Animation Studio</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
       margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
       background: linear-gradient(135deg, #0f172a, #1e1b4b);
-      color: #f1f5f9; min-height: 100vh; padding: 24px 16px;
+      color: #f1f5f9; min-height: 100vh; padding: 24px 16px 60px;
     }
-    .wrap { max-width: 720px; margin: 0 auto; }
-    h1 { font-size: 1.6rem; margin-bottom: 4px; }
-    p.sub { color: #94a3b8; margin-top: 0; margin-bottom: 28px; }
+    .wrap { max-width: 880px; margin: 0 auto; }
+    h1 { font-size: 1.7rem; margin-bottom: 4px; }
+    h2 { font-size: 1.1rem; margin: 0 0 4px; }
+    p.sub { color: #94a3b8; margin-top: 0; margin-bottom: 24px; }
     .card {
       background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
       border-radius: 14px; padding: 20px; margin-bottom: 18px;
     }
+    .step-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; border-radius: 50%; background: #f97316;
+      color: #0f172a; font-weight: 800; font-size: 0.85rem; margin-right: 8px;
+    }
     label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.92rem; }
     small { display: block; color: #94a3b8; margin-bottom: 10px; font-size: 0.8rem; }
-    input[type=file], input[type=number] {
+    input[type=file], input[type=number], input[type=text] {
       width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155;
       background: #0f172a; color: #f1f5f9; margin-bottom: 4px;
     }
-    .row { display: flex; gap: 12px; }
-    .row > div { flex: 1; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 100px; }
     button {
-      width: 100%; padding: 14px; font-size: 1rem; font-weight: 700;
+      padding: 12px 18px; font-size: 0.95rem; font-weight: 700;
       background: linear-gradient(135deg, #f97316, #ea580c); color: white;
-      border: none; border-radius: 10px; cursor: pointer; margin-top: 8px;
+      border: none; border-radius: 10px; cursor: pointer;
     }
+    button.secondary { background: #334155; }
+    button.danger { background: #7f1d1d; padding: 8px 12px; font-size: 0.8rem; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.wide { width: 100%; margin-top: 8px; }
+    #generateBtn { font-size: 1.05rem; padding: 16px; }
+
+    .char-card {
+      display: flex; gap: 16px; background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+      padding: 14px; margin-bottom: 12px; align-items: flex-start; flex-wrap: wrap;
+    }
+    .char-card .fields { flex: 1; min-width: 220px; }
+    .char-preview {
+      width: 140px; height: 190px; border-radius: 8px; background: #0b0f1a;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+      border: 1px dashed #334155; flex-shrink: 0;
+    }
+    .char-preview img { max-width: 100%; max-height: 100%; }
+    .char-preview .placeholder { color: #475569; font-size: 0.75rem; text-align: center; padding: 8px; }
+    .char-status { font-size: 0.78rem; margin-top: 6px; }
+    .char-status.ok { color: #4ade80; }
+    .char-status.bad { color: #f87171; }
+    .char-status.loading { color: #fbbf24; }
+    .char-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+
     #status { margin-top: 16px; }
     .bar-bg { background: #1e293b; border-radius: 8px; overflow: hidden; height: 22px; }
     .bar-fill {
@@ -41,28 +72,35 @@
     }
     #msg { margin-top: 8px; color: #cbd5e1; font-size: 0.9rem; }
     video { width: 100%; border-radius: 12px; margin-top: 16px; display: none; }
-    .err { color: #f87171; margin-top: 10px; }
+    .err { color: #f87171; margin-top: 10px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>🎬 AI Script → 2D Animation Studio</h1>
-    <p class="sub">JSON script + audio zip + character rig upload karo, AI khud animation choreograph karega — har dialogue ke liye ek call.</p>
+    <p class="sub">Character sheet PNG daalo, turant preview dekho ki rig sahi lag rahi hai — phir script JSON aur audio ke saath poora animation video generate karo.</p>
 
     <div class="card">
-      <label>1. Project JSON (dialogues + timeline + voiceAssignments)</label>
-      <small>Wahi JSON jisme characterSettings, dialogues, timeline hota hai.</small>
-      <input type="file" id="projectJson" accept=".json" />
+      <div class="char-header">
+        <h2><span class="step-badge">1</span>Characters</h2>
+        <button type="button" class="secondary" id="addCharBtn">+ Character Add Karo</button>
+      </div>
+      <small>Har character ke liye ek transparent PNG sheet daalo (body/head/mouth/arms/legs scattered layout). Upload karte hi preview turant ban jaayega.</small>
+      <div id="charList"></div>
+    </div>
 
-      <label>2. Audio ZIP (timeline ke hisaab se tute hue dialogue chunks)</label>
-      <small>Har dialogue ka apna audio file, natural order me sorted.</small>
+    <div class="card">
+      <h2><span class="step-badge">2</span>Project JSON</h2>
+      <small>Dialogues + timeline + voiceAssignments wala JSON.</small>
+      <input type="file" id="projectJson" accept=".json" />
+    </div>
+
+    <div class="card">
+      <h2><span class="step-badge">3</span>Audio ZIP</h2>
+      <small>Timeline ke hisaab se tute hue per-dialogue audio chunks (naturally sorted).</small>
       <input type="file" id="audioZip" accept=".zip" />
 
-      <label>3. Characters ZIP</label>
-      <small>Har character ke naam ka folder, andar body-part PNGs (body, head, mouth_shape_1-4, arms, hands, legs).</small>
-      <input type="file" id="charactersZip" accept=".zip" />
-
-      <div class="row">
+      <div class="row" style="margin-top:14px">
         <div>
           <label>Width</label>
           <input type="number" id="width" value="1280" />
@@ -76,9 +114,9 @@
           <input type="number" id="fps" value="24" />
         </div>
       </div>
-
-      <button id="generateBtn">Animation Generate Karo</button>
     </div>
+
+    <button id="generateBtn" class="wide">Animation Generate Karo</button>
 
     <div id="status" style="display:none">
       <div class="bar-bg"><div class="bar-fill" id="barFill">0%</div></div>

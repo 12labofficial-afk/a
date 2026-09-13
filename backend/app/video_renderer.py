@@ -71,8 +71,8 @@ def build_geometry(parts: dict) -> dict:
     fore_r_len = fore_r.height * 0.82 if fore_r else bh * 0.28
     wrist_right = (elbow_right[0], elbow_right[1] + fore_r_len)
 
-    hand_left = (wrist_left[0], wrist_left[1] + fore_l_len * 0.25)
-    hand_right = (wrist_right[0], wrist_right[1] + fore_r_len * 0.25)
+    hand_left = (wrist_left[0], wrist_left[1] + fore_l_len * 0.04)
+    hand_right = (wrist_right[0], wrist_right[1] + fore_r_len * 0.04)
 
     thigh_l_len = thigh_l.height * 0.82 if thigh_l else 0.0
     knee_left = (hip_left[0], hip_left[1] + thigh_l_len)
@@ -152,8 +152,8 @@ def compute_limb_points(pose: RigPose, bind: dict):
 
     angles = {
         "torso": pose.bodyRotation, "head": head_angle,
-        "upper_arm_left": upper_l, "forearm_left": fore_l, "hand_left": fore_l,
-        "upper_arm_right": upper_r, "forearm_right": fore_r, "hand_right": fore_r,
+        "upper_arm_left": upper_l, "forearm_left": fore_l, "hand_left": pose.bodyRotation,
+        "upper_arm_right": upper_r, "forearm_right": fore_r, "hand_right": pose.bodyRotation,
         "thigh_left": pose.leftThighRot, "lower_leg_left": lower_l,
         "thigh_right": pose.rightThighRot, "lower_leg_right": lower_r,
     }
@@ -384,3 +384,15 @@ def render_video(
     proc.stdin.close()
     proc.wait()
     return output_path
+
+
+def render_character_preview(parts: dict, width: int = 500, height: int = 700) -> Image.Image:
+    """Assembles a single character in a neutral talking pose, for a quick upload-and-check preview."""
+    canvas = Image.new("RGBA", (width, height), (30, 32, 44, 255))
+    ground_y = int(height * 0.9)
+    target_h_px = height * 0.72
+    renderer = CharacterRenderer(parts, width // 2, ground_y, target_h_px, facing=1)
+    pose = calculate_rig_pose(0.6, "talk")
+    mouth = "mouth_shape_3" if "mouth_shape_3" in parts else "mouth_shape_1"
+    renderer.draw(canvas, pose, mouth)
+    return canvas.convert("RGB")
