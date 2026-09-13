@@ -5,7 +5,6 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from app.rig_pose import calculate_rig_pose, RigPose
-from app.rig_skeleton import BIND_POSITIONS, RIG_HEIGHT_UNITS
 from app.rig_assets import get_pivot
 
 FONT_CANDIDATES = [
@@ -32,9 +31,71 @@ def rotate_vec(dx, dy, angle_deg):
     return (dx * c - dy * s, dx * s + dy * c)
 
 
-def compute_limb_points(pose: RigPose):
-    """Forward-kinematics: bone world offsets from a pelvis at (0,0), in rig units."""
-    b = BIND_POSITIONS
+def build_geometry(parts: dict) -> dict:
+    """
+    Derives per-character bind-pose joint positions (native pixel units, pelvis at origin)
+    directly from each part's own pixel size, since hand-drawn/scattered-sheet rigs have
+    wildly different proportions between characters and a single shared abstract skeleton
+    does not fit them all.
+    """
+    body = parts.get("body")
+    head = parts.get("head_eyes_opened") or parts.get("head_eyes_closed")
+    arm_l = parts.get("arm_left_upper")
+    arm_r = parts.get("arm_right_upper")
+    fore_l = parts.get("forearm_left")
+    fore_r = parts.get("forearm_right")
+    thigh_l = parts.get("thigh_left")
+    thigh_r = parts.get("thigh_right")
+    leg_l = parts.get("leg_lower_left")
+    leg_r = parts.get("leg_lower_right")
+
+    bw, bh = body.size if body else (100, 150)
+
+    pelvis = (0.0, 0.0)
+    neck = (0.0, -bh * 0.94)
+    shoulder_left = (-bw * 0.36, -bh * 0.88)
+    shoulder_right = (bw * 0.36, -bh * 0.88)
+    hip_left = (-bw * 0.20, -bh * 0.04)
+    hip_right = (bw * 0.20, -bh * 0.04)
+
+    head_h = head.height * 0.92 if head else bh * 0.5
+    head_top = (neck[0], neck[1] - head_h)
+
+    arm_l_len = arm_l.height * 0.82 if arm_l else bh * 0.3
+    elbow_left = (shoulder_left[0], shoulder_left[1] + arm_l_len)
+    arm_r_len = arm_r.height * 0.82 if arm_r else bh * 0.3
+    elbow_right = (shoulder_right[0], shoulder_right[1] + arm_r_len)
+
+    fore_l_len = fore_l.height * 0.82 if fore_l else bh * 0.28
+    wrist_left = (elbow_left[0], elbow_left[1] + fore_l_len)
+    fore_r_len = fore_r.height * 0.82 if fore_r else bh * 0.28
+    wrist_right = (elbow_right[0], elbow_right[1] + fore_r_len)
+
+    hand_left = (wrist_left[0], wrist_left[1] + fore_l_len * 0.25)
+    hand_right = (wrist_right[0], wrist_right[1] + fore_r_len * 0.25)
+
+    thigh_l_len = thigh_l.height * 0.82 if thigh_l else 0.0
+    knee_left = (hip_left[0], hip_left[1] + thigh_l_len)
+    thigh_r_len = thigh_r.height * 0.82 if thigh_r else 0.0
+    knee_right = (hip_right[0], hip_right[1] + thigh_r_len)
+
+    leg_l_len = leg_l.height * 0.82 if leg_l else bh * 0.35
+    foot_left = (knee_left[0], knee_left[1] + leg_l_len)
+    leg_r_len = leg_r.height * 0.82 if leg_r else bh * 0.35
+    foot_right = (knee_right[0], knee_right[1] + leg_r_len)
+
+    return {
+        "pelvis": pelvis, "spine_upper": neck, "neck": neck, "head_top": head_top,
+        "shoulder_left": shoulder_left, "elbow_left": elbow_left, "wrist_left": wrist_left, "hand_left": hand_left,
+        "shoulder_right": shoulder_right, "elbow_right": elbow_right, "wrist_right": wrist_right, "hand_right": hand_right,
+        "hip_left": hip_left, "knee_left": knee_left, "foot_left": foot_left,
+        "hip_right": hip_right, "knee_right": knee_right, "foot_right": foot_right,
+    }
+
+
+def compute_limb_points(pose: RigPose, bind: dict):
+    """Forward-kinematics: bone world offsets from a pelvis at (0,0), in this character's own pixel units."""
+    b = bind
 
     def off(a, c):
         return (b[c][0] - b[a][0], b[c][1] - b[a][1])
@@ -116,10 +177,13 @@ BONE_ORDER = [
 
 
 class CharacterRenderer:
-    def __init__(self, parts: dict, screen_anchor, target_height_px: float, facing: int = 1):
+    def __init__(self, parts: dict, x_px: float, ground_y_px: float, target_height_px: float, facing: int = 1):
         self.parts = parts
-        self.screen_anchor = screen_anchor
-        self.scale = target_height_px / RIG_HEIGHT_UNITS
+        self.bind = build_geometry(parts)
+        natural_height_px = self.bind["foot_left"][1] - self.bind["head_top"][1]
+        self.scale = target_height_px / max(1.0, natural_height_px)
+        feet_offset_px = self.bind["foot_left"][1] * self.scale
+        self.screen_anchor = (x_px, ground_y_px - feet_offset_px)
         self.facing = facing
         self._mouth_cache = {}
 
@@ -136,7 +200,7 @@ class CharacterRenderer:
         if mouth is not None:
             mw, mh = mouth.size
             hw, hh = head.size
-            pos = (int(hw * 0.5 - mw * 0.5), int(hh * 0.60 - mh * 0.5))
+            pos = (int(hw * 0.5 - mw * 0.5), int(hh * 0.87 - mh * 0.5))
             composed.paste(mouth, pos, mouth)
         self._mouth_cache[key] = composed
         return composed
@@ -167,7 +231,7 @@ class CharacterRenderer:
         canvas.alpha_composite(rotated, (paste_x, paste_y))
 
     def draw(self, canvas, pose: RigPose, mouth_shape: str):
-        pts, angles = compute_limb_points(pose)
+        pts, angles = compute_limb_points(pose, self.bind)
         for bone_name, start_joint, slot, _z in BONE_ORDER:
             world_pt = pts[start_joint]
             angle = angles[bone_name]
@@ -240,16 +304,13 @@ def render_video(
     n = max(1, len(char_names))
     ground_y = int(height * 0.88)
     target_h_px = height * 0.62
-    scale = target_h_px / RIG_HEIGHT_UNITS
-    feet_offset_px = BIND_POSITIONS["foot_left"][1] * scale
-    pelvis_y = ground_y - feet_offset_px
 
     renderers = {}
     for i, name in enumerate(char_names):
         x = int(width * (i + 1) / (n + 1))
         facing = 1 if i < (n + 1) / 2 else -1
         parts = character_parts.get(name, {})
-        renderers[name] = CharacterRenderer(parts, (x, pelvis_y), target_h_px, facing)
+        renderers[name] = CharacterRenderer(parts, x, ground_y, target_h_px, facing)
         renderers[name].name_x_frac = (i + 1) / (n + 1)
 
     total_duration = max((t.startTime + t.duration for t in project.timeline), default=1.0) + 1.0
