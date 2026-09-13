@@ -97,6 +97,37 @@ def _detect_wrist_pivot(img: Image.Image):
     return centroid_of(alpha[-q:, :], 0, h - q) or (0.5, 0.97)
 
 
+def get_hand_bind_offset(img: Image.Image, pivot: tuple) -> float:
+    """
+    Degrees to add to a hand's rotation so it obeys the same "0 rotation = hangs
+    straight down from the pivot" convention every limb sprite is drawn to.
+
+    Palm art (an open hand, a fist, a pointing finger) is usually drawn hanging down
+    from its wrist like the forearm above it, but not always — e.g. a fist meant for a
+    sideways punch can be drawn rotated ~90° from that. Rotating it by the forearm's
+    angle directly then swings it a further 90° off from where the forearm actually
+    ends up, making the hand look twisted or disconnected. So this measures which way
+    THIS sprite's own mass actually points from its pivot, and returns the correction
+    needed to bring it in line with the down-hanging convention before the pose's own
+    rotation is added on top.
+    """
+    import numpy as np
+
+    alpha = np.array(img.split()[-1]) > 10
+    h, w = alpha.shape
+    if not alpha.any():
+        return 0.0
+    ys, xs = np.nonzero(alpha)
+    cx, cy = xs.mean(), ys.mean()
+    px, py = pivot[0] * w, pivot[1] * h
+    ux, uy = cx - px, cy - py
+    if ux == 0 and uy == 0:
+        return 0.0
+    import math
+    angle_from_down = math.degrees(math.atan2(ux, uy))
+    return -angle_from_down
+
+
 def _normalize(name: str):
     stem = os.path.splitext(name)[0].lower()
     tokens = re.split(r"[^a-z0-9]+", stem)

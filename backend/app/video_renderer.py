@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 
 from app.rig_pose import calculate_rig_pose, RigPose
-from app.rig_assets import get_pivot
+from app.rig_assets import get_pivot, get_hand_bind_offset
 from app.sheet_template import (
     SCREEN_LEFT_PARTS, SCREEN_RIGHT_PARTS,
     HAND_VARIANTS_SCREEN_LEFT, HAND_VARIANTS_SCREEN_RIGHT,
@@ -334,9 +334,13 @@ class CharacterRenderer:
                 # blueprint's anatomical part names.
                 sprite = self._pick_hand(pose.selectedLeftHand, HAND_VARIANTS_SCREEN_LEFT)
                 pivot = get_pivot("right_palm_1", sprite) if sprite else (0.5, 0.0)
+                if sprite is not None:
+                    angle += get_hand_bind_offset(sprite, pivot)
             elif slot == "__right_hand__":
                 sprite = self._pick_hand(pose.selectedRightHand, HAND_VARIANTS_SCREEN_RIGHT)
                 pivot = get_pivot("left_palm_1", sprite) if sprite else (0.5, 0.0)
+                if sprite is not None:
+                    angle += get_hand_bind_offset(sprite, pivot)
             else:
                 sprite = self.parts.get(slot)
                 pivot = get_pivot(slot, sprite) if sprite else (0.5, 0.0)

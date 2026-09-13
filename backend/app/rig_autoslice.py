@@ -49,12 +49,23 @@ def _crop(img: Image.Image, blob: dict, pad: int = 4) -> Image.Image:
 
 
 def _order_mouths_by_openness(parts: dict):
-    """The four mouth cells aren't drawn in a guaranteed order, so rank the art by how
-    much of it is filled — closed lips are the smallest, a wide open mouth the largest."""
+    """The four mouth cells aren't drawn in a guaranteed order, so rank the art by how open
+    it looks. Total filled-pixel count doesn't work as that measure: a small round "O" mouth
+    can have fewer painted pixels than a wide closed-lip mouth despite being far more open.
+    A closed mouth is always a thin horizontal line/lens regardless of how wide it's drawn,
+    while opening the jaw always adds height — so the height/width aspect ratio of each
+    mouth's own crop (which factors out how big that particular mouth was drawn) is what
+    actually tracks openness, from a flat closed line up to a round wide-open "O"."""
     found = [(slot, parts[slot]) for slot in MOUTH_SLOTS if slot in parts]
     if len(found) < 2:
         return
-    ranked = sorted(found, key=lambda item: (np.array(item[1].split()[-1]) > 10).sum())
+
+    def aspect(image):
+        alpha = np.array(image.split()[-1]) > 10
+        h, w = alpha.shape
+        return h / w if w else 0
+
+    ranked = sorted(found, key=lambda item: aspect(item[1]))
     for i, (_slot, image) in enumerate(ranked, start=1):
         parts[f"mouth_shape_{i}"] = image
 
