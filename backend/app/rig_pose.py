@@ -69,6 +69,29 @@ def calculate_rig_pose(
             selectedLeftHand=left_hand,
         )
 
+    if mode == "walk_talk":
+        walk_freq = t * 4.5
+        leg_r = math.sin(walk_freq)
+        leg_l = -leg_r
+        talk_freq = t * 3.0
+        return RigPose(
+            bodyY=abs(math.sin(walk_freq)) * -6 + 3,
+            bodyRotation=math.sin(walk_freq) * 2,
+            headRotation=math.sin(talk_freq) * 3.0 + math.sin(walk_freq * 2) * 1.2,
+            headBlinkClosed=is_blinking,
+            # right arm gestures while talking; left arm counter-swings with the stride
+            rightArmUpperRot=-20 + math.sin(talk_freq * 1.2) * 18,
+            rightForearmRot=30 + math.sin(talk_freq) * 16,
+            leftArmUpperRot=-leg_l * 22,
+            leftForearmRot=max(0, -leg_l * 16) + 8,
+            rightThighRot=leg_r * 22,
+            rightLowerLegRot=(abs(leg_r) * 34 if leg_r < 0 else 4),
+            leftThighRot=leg_l * 22,
+            leftLowerLegRot=(abs(leg_l) * 34 if leg_l < 0 else 4),
+            selectedRightHand=right_hand,
+            selectedLeftHand=left_hand,
+        )
+
     if mode == "point":
         return RigPose(
             bodyY=math.sin(t * 2.0) * 1.5,
