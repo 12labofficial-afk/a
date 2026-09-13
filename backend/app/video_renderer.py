@@ -152,8 +152,8 @@ def compute_limb_points(pose: RigPose, bind: dict):
 
     angles = {
         "torso": pose.bodyRotation, "head": head_angle,
-        "upper_arm_left": upper_l, "forearm_left": fore_l, "hand_left": pose.bodyRotation,
-        "upper_arm_right": upper_r, "forearm_right": fore_r, "hand_right": pose.bodyRotation,
+        "upper_arm_left": upper_l, "forearm_left": fore_l, "hand_left": fore_l,
+        "upper_arm_right": upper_r, "forearm_right": fore_r, "hand_right": fore_r,
         "thigh_left": pose.leftThighRot, "lower_leg_left": lower_l,
         "thigh_right": pose.rightThighRot, "lower_leg_right": lower_r,
     }
@@ -215,11 +215,20 @@ class CharacterRenderer:
             scaled = scaled.transpose(Image.FLIP_LEFT_RIGHT)
             pivot_frac = (1.0 - pivot_frac[0], pivot_frac[1])
 
-        diag = int(math.hypot(sw, sh)) + 6
-        padded = Image.new("RGBA", (diag, diag), (0, 0, 0, 0))
-        ox, oy = (diag - sw) // 2, (diag - sh) // 2
+        # Pivots are often off-center (e.g. top-center for a hanging limb), so the padded
+        # canvas must have enough margin for the FARTHEST corner from the pivot to swing
+        # through at any rotation angle — not just half the sprite's own diagonal, which
+        # only holds for a centered pivot and otherwise clips the sprite when rotated.
+        pivot_local = (sw * pivot_frac[0], sh * pivot_frac[1])
+        corners = [(0, 0), (sw, 0), (0, sh), (sw, sh)]
+        max_radius = max(math.hypot(cx - pivot_local[0], cy - pivot_local[1]) for cx, cy in corners)
+        canvas_size = int(max_radius * 2) + 6
+        pivot_px = (canvas_size / 2, canvas_size / 2)
+
+        padded = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+        ox = int(pivot_px[0] - pivot_local[0])
+        oy = int(pivot_px[1] - pivot_local[1])
         padded.paste(scaled, (ox, oy), scaled)
-        pivot_px = (ox + sw * pivot_frac[0], oy + sh * pivot_frac[1])
 
         screen_angle = angle_deg if self.facing == 1 else -angle_deg
         rotated = padded.rotate(-screen_angle, resample=Image.BICUBIC, center=pivot_px)

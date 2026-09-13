@@ -66,14 +66,56 @@ SLOT_KEYWORDS = {
     "leg_lower_right": [["leg", "lower", "right"], ["right", "leg", "lower"], ["right", "shin"], ["right", "foot"], ["right", "leg"]],
 }
 
-# top-center vs bottom-center pivot for rotation, matching rest-pose direction of each bone
+# top-center vs bottom-center pivot for rotation, matching rest-pose direction of each bone.
+# Limbs are reliably drawn hanging straight down/up, so a fixed convention works.
 PIVOT_AT_TOP = {
     "arm_left_upper", "arm_right_upper", "forearm_left", "forearm_right",
-    "hand_left", "hand_right",
-    "left_palm_1", "left_palm_2", "left_palm_3", "right_palm_1", "right_palm_2", "right_palm_3", "right_hand_prop",
     "thigh_left", "thigh_right", "leg_lower_left", "leg_lower_right",
 }
 PIVOT_AT_BOTTOM = {"head_eyes_opened", "head_eyes_closed", "body"}
+
+# Hand/gesture art is pre-posed at arbitrary angles (a pointing hand drawn sideways, a fist
+# drawn diagonally, ...) so a fixed top/bottom guess is often wrong — the wrist attachment
+# point is auto-detected per image instead (see _detect_wrist_pivot).
+HAND_SLOTS = {
+    "hand_left", "hand_right", "left_palm_1", "left_palm_2", "left_palm_3",
+    "right_palm_1", "right_palm_2", "right_palm_3", "right_hand_prop",
+}
+
+
+def _detect_wrist_pivot(img: Image.Image):
+    """
+    Hands are wide at the palm/fingers and narrow at the wrist, and are not always drawn
+    hanging straight down (a pointing hand may be posed at a diagonal). Finds whichever end
+    (along the image's longer axis) has the smaller average cross-section, then returns the
+    actual pixel centroid of that narrow end (not just the edge midpoint) as the pivot, so a
+    wrist sitting off to one side of that end is still located correctly.
+    """
+    import numpy as np
+
+    alpha = np.array(img.split()[-1]) > 10
+    h, w = alpha.shape
+    if w == 0 or h == 0 or not alpha.any():
+        return (0.5, 0.0)
+
+    def centroid_of(mask_slice, x_offset, y_offset):
+        ys, xs = np.nonzero(mask_slice)
+        if len(xs) == 0:
+            return None
+        return ((xs.mean() + x_offset) / w, (ys.mean() + y_offset) / h)
+
+    if w >= h:
+        profile = alpha.sum(axis=0)
+        q = max(1, w // 4)
+        if profile[:q].mean() < profile[-q:].mean():
+            return centroid_of(alpha[:, :q], 0, 0) or (0.03, 0.5)
+        return centroid_of(alpha[:, -q:], w - q, 0) or (0.97, 0.5)
+    else:
+        profile = alpha.sum(axis=1)
+        q = max(1, h // 4)
+        if profile[:q].mean() < profile[-q:].mean():
+            return centroid_of(alpha[:q, :], 0, 0) or (0.5, 0.03)
+        return centroid_of(alpha[-q:, :], 0, h - q) or (0.5, 0.97)
 
 
 def _normalize(name: str):
@@ -134,4 +176,6 @@ def get_pivot(slot: str, img: Image.Image = None):
     """Fractional (0..1) pivot point used as the rotation/attachment anchor."""
     if slot in PIVOT_AT_BOTTOM:
         return (0.5, 1.0)
+    if slot in HAND_SLOTS and img is not None:
+        return _detect_wrist_pivot(img)
     return (0.5, 0.0)
