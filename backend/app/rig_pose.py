@@ -5,6 +5,27 @@ character's right-hand art, which the renderer draws on the viewer's left."""
 import math
 from dataclasses import dataclass
 
+# (mode, Hindi label) — drives both the one-click preview buttons in the frontend and
+# server-side validation of which mode names are real.
+POSE_LIBRARY = [
+    ("idle", "Idle (khada hua)"),
+    ("talk", "Baat karna"),
+    ("walk_talk", "Chalte hue baat karna"),
+    ("run_talk", "Daudte hue baat karna"),
+    ("wave", "Haath hilana (Wave)"),
+    ("point", "Ungli se point karna"),
+    ("thinking", "Sochna"),
+    ("shrug", "Shrug (pata nahi)"),
+    ("excited_jump", "Khushi me uchalna"),
+    ("laughing", "Hansna"),
+    ("sad", "Udaas"),
+    ("clapping", "Taali bajana"),
+    ("facepalm", "Facepalm"),
+    ("scratch_head", "Sar khujana (confused)"),
+    ("angry", "Gussa"),
+]
+POSE_MODES = [m for m, _ in POSE_LIBRARY]
+
 
 @dataclass
 class RigPose:
@@ -94,6 +115,175 @@ def calculate_rig_pose(
             leftLowerLegRot=(abs(leg_l) * 34 if leg_l < 0 else 4),
             selectedRightHand=right_hand,
             selectedLeftHand=left_hand,
+        )
+
+    if mode == "run_talk":
+        run_freq = t * 8.0
+        leg_r = math.sin(run_freq)
+        leg_l = -leg_r
+        talk_freq = t * 3.0
+        return RigPose(
+            bodyY=abs(math.sin(run_freq)) * -10 + 5,
+            bodyRotation=6 + math.sin(run_freq) * 2,
+            headRotation=math.sin(talk_freq) * 2.5,
+            headBobY=abs(math.sin(run_freq)) * -5,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=leg_l * 34 - 10,
+            rightForearmRot=40 + math.sin(talk_freq) * 10,
+            leftArmUpperRot=leg_r * 34 + 10,
+            leftForearmRot=max(0, leg_r * 26) + 15,
+            rightThighRot=leg_r * 40,
+            rightLowerLegRot=(abs(leg_r) * 58 if leg_r < 0 else 8),
+            leftThighRot=leg_l * 40,
+            leftLowerLegRot=(abs(leg_l) * 58 if leg_l < 0 else 8),
+            selectedRightHand=right_hand,
+            selectedLeftHand=left_hand,
+        )
+
+    if mode == "thinking":
+        think_freq = t * 1.2
+        return RigPose(
+            bodyY=math.sin(think_freq) * 1.5,
+            bodyRotation=-3,
+            headRotation=8 + math.sin(think_freq) * 3,
+            headBobY=math.sin(think_freq) * 1.0,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=-95,
+            rightForearmRot=-70 + math.sin(think_freq) * 4,
+            leftArmUpperRot=-math.sin(think_freq) * 2,
+            leftForearmRot=8,
+            selectedRightHand=right_hand_prop or "right_palm_2",
+            selectedLeftHand=left_hand,
+        )
+
+    if mode == "shrug":
+        shrug_freq = t * 2.0
+        return RigPose(
+            bodyY=-4,
+            headRotation=math.sin(shrug_freq) * 2,
+            headBobY=-1.5,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=-70,
+            rightForearmRot=-40,
+            leftArmUpperRot=70,
+            leftForearmRot=40,
+            selectedRightHand=right_hand_prop or "right_palm_2",
+            selectedLeftHand=left_hand_prop or "left_palm_2",
+        )
+
+    if mode == "excited_jump":
+        jump_freq = t * 5.0
+        jump = abs(math.sin(jump_freq))
+        return RigPose(
+            bodyY=-jump * 22,
+            bodyRotation=math.sin(jump_freq) * 3,
+            headRotation=math.sin(jump_freq * 2) * 3,
+            headBobY=-jump * 6,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=-100 + math.sin(jump_freq) * 10,
+            rightForearmRot=-20,
+            leftArmUpperRot=100 - math.sin(jump_freq) * 10,
+            leftForearmRot=20,
+            rightThighRot=-jump * 10,
+            rightLowerLegRot=jump * 20,
+            leftThighRot=-jump * 10,
+            leftLowerLegRot=jump * 20,
+            selectedRightHand=right_hand_prop or "right_palm_2",
+            selectedLeftHand=left_hand_prop or "left_palm_2",
+        )
+
+    if mode == "laughing":
+        laugh_freq = t * 9.0
+        return RigPose(
+            bodyY=math.sin(laugh_freq) * 3,
+            bodyRotation=math.sin(laugh_freq) * 5,
+            headRotation=-10 + math.sin(laugh_freq) * 4,
+            headBobY=math.sin(laugh_freq * 2) * 2,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=-30 + math.sin(laugh_freq) * 8,
+            rightForearmRot=50,
+            leftArmUpperRot=15 + math.sin(laugh_freq + 1) * 6,
+            leftForearmRot=25,
+            selectedRightHand=right_hand,
+            selectedLeftHand=left_hand,
+        )
+
+    if mode == "sad":
+        sad_freq = t * 1.0
+        return RigPose(
+            bodyY=2 + math.sin(sad_freq) * 1.0,
+            bodyRotation=-2,
+            headRotation=14,
+            headBobY=2,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=4 + math.sin(sad_freq) * 2,
+            rightForearmRot=6,
+            leftArmUpperRot=-4 - math.sin(sad_freq) * 2,
+            leftForearmRot=-6,
+            selectedRightHand=right_hand,
+            selectedLeftHand=left_hand,
+        )
+
+    if mode == "clapping":
+        clap_freq = t * 7.0
+        clap = (math.sin(clap_freq) + 1) / 2
+        return RigPose(
+            bodyY=math.sin(clap_freq * 0.5) * 1.5,
+            headRotation=math.sin(clap_freq * 0.5) * 2,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=-30,
+            rightForearmRot=40 - clap * 20,
+            leftArmUpperRot=30,
+            leftForearmRot=-40 + clap * 20,
+            selectedRightHand=right_hand,
+            selectedLeftHand=left_hand,
+        )
+
+    if mode == "facepalm":
+        return RigPose(
+            bodyY=-2,
+            bodyRotation=3,
+            headRotation=18,
+            headBobY=1.5,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=-105,
+            rightForearmRot=-55,
+            leftArmUpperRot=6,
+            leftForearmRot=10,
+            selectedRightHand=right_hand_prop or "right_palm_2",
+            selectedLeftHand=left_hand,
+        )
+
+    if mode == "scratch_head":
+        scratch_freq = t * 6.0
+        return RigPose(
+            bodyY=math.sin(scratch_freq * 0.4) * 1.5,
+            bodyRotation=-2,
+            headRotation=-8 + math.sin(scratch_freq * 0.4) * 3,
+            headBobY=math.sin(scratch_freq) * 1.2,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=-125,
+            rightForearmRot=-80 + math.sin(scratch_freq) * 8,
+            leftArmUpperRot=4,
+            leftForearmRot=8,
+            selectedRightHand=right_hand_prop or "right_palm_1",
+            selectedLeftHand=left_hand,
+        )
+
+    if mode == "angry":
+        angry_freq = t * 10.0
+        return RigPose(
+            bodyY=math.sin(angry_freq) * 1.0,
+            bodyRotation=3 + math.sin(angry_freq) * 1.5,
+            headRotation=-3 + math.sin(angry_freq) * 2,
+            headBobY=math.sin(angry_freq) * 1.0,
+            headBlinkClosed=is_blinking,
+            rightArmUpperRot=-15 + math.sin(angry_freq) * 3,
+            rightForearmRot=60,
+            leftArmUpperRot=15 - math.sin(angry_freq) * 3,
+            leftForearmRot=-60,
+            selectedRightHand=right_hand_prop or "right_palm_3",
+            selectedLeftHand=left_hand_prop or "left_palm_3",
         )
 
     if mode == "point":

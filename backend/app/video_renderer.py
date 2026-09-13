@@ -466,3 +466,62 @@ def render_character_preview(parts: dict, width: int = 500, height: int = 700) -
     mouth = "mouth_shape_3" if "mouth_shape_3" in parts else "mouth_shape_1"
     renderer.draw(canvas, pose, mouth)
     return canvas.convert("RGB")
+
+
+def render_pose_animation(
+    parts: dict, mode: str, output_path: str,
+    width: int = 480, height: int = 640, fps: int = 20, duration: float = 3.0,
+) -> str:
+    """Short, silent one-click preview clip of a single character performing one named pose."""
+    from app.audio_utils import amplitude_to_mouth_shape
+
+    total_frames = max(1, int(duration * fps))
+    ground_y = int(height * 0.88)
+    target_h = height * 0.6
+
+    walks = mode in ("walk_talk", "run_talk")
+    x_start, x_end = width * 0.25, width * 0.75
+    talk_like = "talk" in mode
+
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo", "-pixel_format", "rgb24",
+        "-video_size", f"{width}x{height}", "-framerate", str(fps),
+        "-i", "-",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast",
+        output_path,
+    ]
+    proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    for frame_idx in range(total_frames):
+        t = frame_idx / fps
+        progress = t / duration
+        x = (x_start + (x_end - x_start) * progress) if walks else width / 2
+        facing = -1 if walks else 1
+
+        canvas = Image.new("RGBA", (width, height), (24, 28, 40, 255))
+        renderer = CharacterRenderer(parts, x, ground_y, target_h, facing=facing)
+        pose = calculate_rig_pose(t, mode)
+
+        if talk_like:
+            mouth = amplitude_to_mouth_shape(abs(math.sin(t * 9.0)) * 0.5)
+        elif mode == "laughing":
+            mouth = "mouth_shape_4"
+        elif mode == "excited_jump":
+            mouth = "mouth_shape_3"
+        else:
+            mouth = "mouth_shape_1"
+
+        renderer.draw(canvas, pose, mouth)
+        arr = np.asarray(canvas.convert("RGB"), dtype=np.uint8)
+        try:
+            proc.stdin.write(arr.tobytes())
+        except BrokenPipeError:
+            break
+
+    try:
+        proc.stdin.close()
+    except BrokenPipeError:
+        pass
+    proc.wait()
+    return output_path

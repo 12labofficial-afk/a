@@ -63,6 +63,22 @@
     .char-status.loading { color: #fbbf24; }
     .char-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 
+    .anim-section {
+      flex-basis: 100%; margin-top: 14px; padding-top: 14px;
+      border-top: 1px dashed rgba(255,255,255,0.1);
+    }
+    .pose-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .pose-btn {
+      background: #1e293b; border: 1px solid #334155; color: #cbd5e1;
+      padding: 7px 12px; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
+      cursor: pointer;
+    }
+    .pose-btn:hover:not(:disabled) { background: #334155; border-color: #f97316; }
+    .pose-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .anim-result { margin-top: 12px; }
+    .anim-result video { max-width: 260px; border-radius: 10px; display: block; }
+    .anim-loading { color: #94a3b8; font-size: 0.82rem; }
+
     #status { margin-top: 16px; }
     .bar-bg { background: #1e293b; border-radius: 8px; overflow: hidden; height: 22px; }
     .bar-fill {

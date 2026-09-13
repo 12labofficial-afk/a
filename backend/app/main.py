@@ -1,6 +1,7 @@
 import io
 import os
 import shutil
+import uuid
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -110,6 +111,45 @@ async def preview_character(sheet: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Sheet process nahi ho payi: {e}")
+
+
+@app.get("/api/pose-library")
+def pose_library():
+    """The animation presets the one-click preview buttons are built from."""
+    from app.rig_pose import POSE_LIBRARY
+    return [{"mode": m, "label": label} for m, label in POSE_LIBRARY]
+
+
+@app.post("/api/preview-animation")
+async def preview_animation(sheet: UploadFile = File(...), mode: str = Form(...)):
+    """Upload one character sheet PNG + a pose name, get back a short one-click preview clip."""
+    from app.rig_autoslice import auto_slice_sheet
+    from app.video_renderer import render_pose_animation
+    from app.rig_pose import POSE_MODES
+
+    if mode not in POSE_MODES:
+        raise HTTPException(status_code=400, detail=f"Unknown mode '{mode}'. Valid: {', '.join(POSE_MODES)}")
+
+    try:
+        raw = await sheet.read()
+        img = Image.open(io.BytesIO(raw))
+        parts = auto_slice_sheet(img)
+        if len(parts) < 3:
+            raise HTTPException(
+                status_code=422,
+                detail="Sheet me pehchane jaane layak parts nahi mile.",
+            )
+
+        out_dir = os.path.join(config.DATA_DIR, "anim_previews")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"{uuid.uuid4().hex[:12]}.mp4")
+        render_pose_animation(parts, mode, out_path)
+
+        return FileResponse(out_path, media_type="video/mp4", filename=f"{mode}.mp4")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Animation nahi ban payi: {e}")
 
 
 @app.get("/api/jobs/{job_id}")
