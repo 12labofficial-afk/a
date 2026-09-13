@@ -1,7 +1,8 @@
 """
 Auto-slices a single flattened character sheet PNG (parts scattered on transparent
 background at fixed positions) into named body-part images, using connected-component
-blob detection + nearest-anchor matching against sheet_template.STRUCTURAL_SLOTS.
+blob detection + nearest-anchor matching against sheet_template.STRUCTURAL_SLOTS —
+positions measured directly off the user's own labeled blueprint/legend sheet.
 """
 import numpy as np
 from PIL import Image
@@ -62,7 +63,9 @@ def auto_slice_sheet(img: Image.Image) -> dict:
     parts = {}
     used = set()
 
-    # 1. Structural slots: nearest-centroid match
+    # 1. Every structural/named slot (body, head, limbs, and all hand/gesture variants):
+    #    nearest-centroid match against the exact positions measured off the user's own
+    #    blueprint legend.
     for slot, (acx, acy, _aw, _ah) in STRUCTURAL_SLOTS.items():
         best_blob, best_dist = None, None
         for b in blobs:
@@ -75,30 +78,24 @@ def auto_slice_sheet(img: Image.Image) -> dict:
             parts[slot] = _crop_blob(img, best_blob)
             used.add(id(best_blob))
 
-    # 2. Mouth region: collect all remaining blobs inside it, rank by pixel area (openness)
+    # 2. Mouth region: collect all remaining blobs inside it, rank by pixel area (openness) —
+    #    the 4 mouth shapes aren't guaranteed to be stacked in intensity order on every sheet.
     mouth_candidates = [b for b in blobs if id(b) not in used and _in_region(b, MOUTH_REGION)]
     mouth_candidates.sort(key=lambda b: b["area"])
     for i, b in enumerate(mouth_candidates[:4], start=1):
         parts[f"mouth_shape_{i}"] = _crop_blob(img, b)
         used.add(id(b))
 
-    # 3. Everything else hand-prop-sized becomes an interchangeable gesture pool
-    hand_pool = []
-    for b in blobs:
-        if id(b) in used:
-            continue
-        area_frac = b["area"] / (img.width * img.height)
-        if 0.0003 < area_frac < 0.03:
-            hand_pool.append(_crop_blob(img, b))
-
-    hand_slot_names = ["right_hand_sword", "right_palm_1", "right_palm_2",
-                        "left_palm_3_cup", "left_palm_1", "left_palm_2"]
-    for name, img_part in zip(hand_slot_names, hand_pool):
-        parts[name] = img_part
-    # if fewer gesture variants exist than named slots, reuse whatever was found
-    if hand_pool:
-        for name in hand_slot_names:
-            if name not in parts:
-                parts[name] = hand_pool[0]
+    # Graceful fallback: if the default neutral hand wasn't found, reuse a palm variant.
+    if "hand_left" not in parts:
+        for alt in ("left_palm_1", "left_palm_2", "left_palm_3"):
+            if alt in parts:
+                parts["hand_left"] = parts[alt]
+                break
+    if "hand_right" not in parts:
+        for alt in ("right_palm_1", "right_palm_2", "right_palm_3", "right_hand_prop"):
+            if alt in parts:
+                parts["hand_right"] = parts[alt]
+                break
 
     return parts

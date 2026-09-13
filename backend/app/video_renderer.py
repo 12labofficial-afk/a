@@ -240,11 +240,11 @@ class CharacterRenderer:
                 sprite = self._head_with_mouth(head_slot, mouth_shape)
                 pivot = (0.5, 1.0)
             elif slot == "__left_hand__":
-                sprite = self.parts.get(pose.selectedLeftHand) or self.parts.get("left_palm_3_cup")
-                pivot = get_pivot("left_palm_1", sprite) if sprite else (0.5, 0.0)
+                sprite = self.parts.get(pose.selectedLeftHand) or self.parts.get("hand_left")
+                pivot = get_pivot("hand_left", sprite) if sprite else (0.5, 0.0)
             elif slot == "__right_hand__":
-                sprite = self.parts.get(pose.selectedRightHand) or self.parts.get("right_hand_sword")
-                pivot = get_pivot("right_palm_1", sprite) if sprite else (0.5, 0.0)
+                sprite = self.parts.get(pose.selectedRightHand) or self.parts.get("hand_right")
+                pivot = get_pivot("hand_right", sprite) if sprite else (0.5, 0.0)
             else:
                 sprite = self.parts.get(slot)
                 pivot = get_pivot(slot, sprite) if sprite else (0.5, 0.0)

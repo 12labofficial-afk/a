@@ -17,8 +17,8 @@ class RigPose:
     rightLowerLegRot: float = 0.0
     leftThighRot: float = 0.0
     leftLowerLegRot: float = 0.0
-    selectedRightHand: str = "right_hand_sword"
-    selectedLeftHand: str = "left_palm_3_cup"
+    selectedRightHand: str = "hand_right"
+    selectedLeftHand: str = "hand_left"
 
 
 def calculate_rig_pose(
@@ -33,8 +33,8 @@ def calculate_rig_pose(
     blink_cycle = t_seconds % 3.6
     is_blinking = force_blink or blink_cycle < 0.16
 
-    right_hand = right_hand_prop or "right_hand_sword"
-    left_hand = left_hand_prop or "left_palm_3_cup"
+    right_hand = right_hand_prop or "hand_right"
+    left_hand = left_hand_prop or "hand_left"
 
     if mode == "wave":
         wave_freq = t * 6.0
