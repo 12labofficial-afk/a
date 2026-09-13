@@ -11,6 +11,7 @@ class RigPose:
     bodyY: float = 0.0
     bodyRotation: float = 0.0
     headRotation: float = 0.0
+    headBobY: float = 0.0
     headBlinkClosed: bool = False
     rightArmUpperRot: float = 0.0
     rightForearmRot: float = 0.0
@@ -33,8 +34,8 @@ def calculate_rig_pose(
     left_hand_prop: str = None,
 ) -> RigPose:
     t = t_seconds * speed_multiplier
-    blink_cycle = t_seconds % 3.6
-    is_blinking = force_blink or blink_cycle < 0.16
+    blink_cycle = t_seconds % 2.6
+    is_blinking = force_blink or blink_cycle < 0.20
 
     right_hand = right_hand_prop or "right_palm_1"
     left_hand = left_hand_prop or "left_palm_1"
@@ -45,6 +46,7 @@ def calculate_rig_pose(
             bodyY=math.sin(t * 1.5) * 2,
             bodyRotation=math.sin(t * 1.5) * 1.2,
             headRotation=2 + math.sin(t * 2) * 2,
+            headBobY=math.sin(t * 2) * 2,
             headBlinkClosed=is_blinking,
             rightArmUpperRot=-75 + math.sin(wave_freq) * 8,
             rightForearmRot=-35 + math.sin(wave_freq) * 22,
@@ -60,6 +62,7 @@ def calculate_rig_pose(
             bodyY=math.sin(talk_freq) * 2.5,
             bodyRotation=math.sin(talk_freq * 0.8) * 1.5,
             headRotation=math.sin(talk_freq) * 3.0,
+            headBobY=math.sin(talk_freq * 1.3) * 2,
             headBlinkClosed=is_blinking,
             rightArmUpperRot=-12 + math.sin(talk_freq * 1.2) * 10,
             rightForearmRot=25 + math.sin(talk_freq) * 12,
@@ -78,6 +81,7 @@ def calculate_rig_pose(
             bodyY=abs(math.sin(walk_freq)) * -6 + 3,
             bodyRotation=math.sin(walk_freq) * 2,
             headRotation=math.sin(talk_freq) * 3.0 + math.sin(walk_freq * 2) * 1.2,
+            headBobY=abs(math.sin(walk_freq)) * -3.5,
             headBlinkClosed=is_blinking,
             # right arm gestures while talking; left arm counter-swings with the stride
             rightArmUpperRot=-20 + math.sin(talk_freq * 1.2) * 18,
@@ -97,6 +101,7 @@ def calculate_rig_pose(
             bodyY=math.sin(t * 2.0) * 1.5,
             bodyRotation=4,
             headRotation=-2,
+            headBobY=math.sin(t * 2.0) * 1.5,
             headBlinkClosed=is_blinking,
             rightArmUpperRot=-55,
             rightForearmRot=-10,
@@ -112,6 +117,7 @@ def calculate_rig_pose(
         bodyY=math.sin(breath_freq) * 2.5,
         bodyRotation=math.sin(breath_freq * 0.5) * 0.8,
         headRotation=math.sin(breath_freq * 0.7) * 1.5,
+        headBobY=math.sin(breath_freq * 0.7) * 1.8,
         headBlinkClosed=is_blinking,
         rightArmUpperRot=math.sin(breath_freq) * 3,
         rightForearmRot=math.sin(breath_freq + 0.5) * 2.5,

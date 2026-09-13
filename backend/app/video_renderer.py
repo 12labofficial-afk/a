@@ -139,7 +139,10 @@ def compute_limb_points(pose: RigPose, bind: dict):
     pts["spine_upper"] = (pts["pelvis"][0] + dx, pts["pelvis"][1] + dy)
 
     dx, dy = rotate_vec(*off("pelvis", "neck"), pose.bodyRotation)
-    pts["neck"] = (pts["pelvis"][0] + dx, pts["pelvis"][1] + dy)
+    # headBobY only nudges where the head sprite attaches (the "head" bone's world_pt is
+    # this same "neck" point) — the torso/shoulders/hips read off pelvis instead, so this
+    # doesn't disturb them.
+    pts["neck"] = (pts["pelvis"][0] + dx, pts["pelvis"][1] + dy + pose.headBobY)
 
     head_angle = pose.bodyRotation + pose.headRotation
     dx, dy = rotate_vec(*off("neck", "head_top"), head_angle)
