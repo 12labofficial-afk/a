@@ -83,7 +83,12 @@ def _foot_locked_leg_angles(t, cadence, phase_offset, walk_speed_px, leg_length_
         frac = (cycle_pos - math.pi) / math.pi  # 0 -> 1 across swing
         ease = (1 - math.cos(math.pi * frac)) / 2
         rel_x = -half_stride + 2 * half_stride * ease
-        knee = lift_deg * math.sin(math.pi * frac)
+        # A real walk's knee snaps into its bend right after lift-off (for ground
+        # clearance) and straightens back out more gradually before the next
+        # touchdown — an even peak-in-the-middle sine looks noticeably more
+        # mechanical than this. frac**0.5 pulls the peak to roughly a third of
+        # the way through swing instead of the halfway point.
+        knee = lift_deg * math.sin(math.pi * frac ** 0.5)
 
     ratio = max(-0.95, min(0.95, rel_x / leg_length_px))
     thigh = math.degrees(math.asin(ratio))
@@ -160,8 +165,13 @@ def calculate_rig_pose(
             # right arm gestures while talking; left arm counter-swings with the stride
             rightArmUpperRot=-20 + math.sin(talk_freq * 1.2) * 18,
             rightForearmRot=30 + math.sin(talk_freq) * 16,
-            leftArmUpperRot=-leg_l * 22,
-            leftForearmRot=max(0, -leg_l * 16) + 8,
+            # The left arm counter-swings with the RIGHT leg (real walk-cycle
+            # reference data confirms opposite-side arm and leg move together) —
+            # driven directly off right_thigh's own computed curve, not a separate
+            # sine, so it stays exactly in phase and shape with however the leg is
+            # actually moving (foot-locked stance-then-swing, not a plain sine).
+            leftArmUpperRot=right_thigh * 0.6,
+            leftForearmRot=max(0, right_thigh * 0.4) + 8,
             rightThighRot=right_thigh,
             rightLowerLegRot=right_knee,
             leftThighRot=left_thigh,
