@@ -518,6 +518,14 @@ def render_pose_animation(
     x_start, x_end = width * 0.25, width * 0.75
     talk_like = "talk" in mode
 
+    walk_speed_px = leg_length_px = None
+    if walks:
+        probe = CharacterRenderer(parts, 0, ground_y, target_h, facing=1)
+        leg_length_bind = probe.bind["foot_left"][1] - probe.bind["hip_left"][1]
+        leg_length_px = max(1.0, leg_length_bind)
+        screen_speed = (x_end - x_start) / duration
+        walk_speed_px = screen_speed / probe.scale
+
     ffmpeg_cmd = [
         "ffmpeg", "-y",
         "-f", "rawvideo", "-pixel_format", "rgb24",
@@ -536,7 +544,7 @@ def render_pose_animation(
 
         canvas = Image.new("RGBA", (width, height), (24, 28, 40, 255))
         renderer = CharacterRenderer(parts, x, ground_y, target_h, facing=facing)
-        pose = calculate_rig_pose(t, mode)
+        pose = calculate_rig_pose(t, mode, walk_speed_px=walk_speed_px, leg_length_px=leg_length_px)
 
         if talk_like:
             mouth = amplitude_to_mouth_shape(abs(math.sin(t * 9.0)) * 0.5)

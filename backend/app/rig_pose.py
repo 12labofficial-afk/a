@@ -46,6 +46,50 @@ class RigPose:
     selectedLeftHand: str = "left_palm_1"
 
 
+def _foot_locked_leg_angles(t, cadence, phase_offset, walk_speed_px, leg_length_px, lift_deg):
+    """
+    Thigh/lower-leg angles for one leg of a walk cycle whose planted foot actually stays
+    put on the ground while the pelvis translates over it, instead of a plain sine that
+    swings the foot back and forth with no regard for how fast the body is moving.
+
+    A sine-driven leg (the old approach) always looks fine at one particular walk speed,
+    but at any other speed the foot's own back-and-forth swing fights the body's
+    translation — most visibly when the swing carries the foot backward on screen while
+    the body is still moving forward, which reads as moonwalking. Locking the stance
+    foot's world position removes that mismatch outright: during stance the foot's
+    position relative to the pelvis is derived directly from how far the pelvis has
+    moved since touchdown, so it is exactly stationary on the ground by construction,
+    whatever the walk speed is.
+
+    Returns (thigh_deg, lower_leg_deg).
+    """
+    omega = cadence
+    half_period = math.pi / omega
+    # Distance the pelvis covers during one stance (or swing) half-cycle. The planted
+    # foot's position relative to the pelvis must cover exactly this same distance
+    # over the stance half-cycle (not more) for its ABSOLUTE position to stay fixed:
+    # rel_x(t) = rel_x(0) - walk_speed*t, so rel_x swings across a total span of
+    # exactly this distance, split evenly ahead of and behind the pelvis.
+    half_stride = (walk_speed_px * half_period) / 2
+
+    cycle_pos = (t * omega + phase_offset) % (2 * math.pi)
+    in_stance = cycle_pos < math.pi
+
+    if in_stance:
+        frac = cycle_pos / math.pi  # 0 -> 1 across stance
+        rel_x = half_stride * (1 - 2 * frac)
+        knee = 4.0
+    else:
+        frac = (cycle_pos - math.pi) / math.pi  # 0 -> 1 across swing
+        ease = (1 - math.cos(math.pi * frac)) / 2
+        rel_x = -half_stride + 2 * half_stride * ease
+        knee = lift_deg * math.sin(math.pi * frac)
+
+    ratio = max(-0.95, min(0.95, rel_x / leg_length_px))
+    thigh = math.degrees(math.asin(ratio))
+    return thigh, knee
+
+
 def calculate_rig_pose(
     t_seconds: float,
     mode: str,
@@ -53,6 +97,8 @@ def calculate_rig_pose(
     force_blink: bool = False,
     right_hand_prop: str = None,
     left_hand_prop: str = None,
+    walk_speed_px: float = None,
+    leg_length_px: float = None,
 ) -> RigPose:
     t = t_seconds * speed_multiplier
     blink_cycle = t_seconds % 2.6
@@ -94,10 +140,17 @@ def calculate_rig_pose(
         )
 
     if mode == "walk_talk":
-        walk_freq = t * 4.5
+        cadence = 4.5
+        walk_freq = t * cadence
         leg_r = math.sin(walk_freq)
         leg_l = -leg_r
         talk_freq = t * 3.0
+        if walk_speed_px and leg_length_px:
+            right_thigh, right_knee = _foot_locked_leg_angles(t, cadence, 0.0, walk_speed_px, leg_length_px, 34.0)
+            left_thigh, left_knee = _foot_locked_leg_angles(t, cadence, math.pi, walk_speed_px, leg_length_px, 34.0)
+        else:
+            right_thigh, right_knee = leg_r * 22, (abs(leg_r) * 34 if leg_r < 0 else 4)
+            left_thigh, left_knee = leg_l * 22, (abs(leg_l) * 34 if leg_l < 0 else 4)
         return RigPose(
             bodyY=abs(math.sin(walk_freq)) * -6 + 3,
             bodyRotation=math.sin(walk_freq) * 2,
@@ -109,19 +162,26 @@ def calculate_rig_pose(
             rightForearmRot=30 + math.sin(talk_freq) * 16,
             leftArmUpperRot=-leg_l * 22,
             leftForearmRot=max(0, -leg_l * 16) + 8,
-            rightThighRot=leg_r * 22,
-            rightLowerLegRot=(abs(leg_r) * 34 if leg_r < 0 else 4),
-            leftThighRot=leg_l * 22,
-            leftLowerLegRot=(abs(leg_l) * 34 if leg_l < 0 else 4),
+            rightThighRot=right_thigh,
+            rightLowerLegRot=right_knee,
+            leftThighRot=left_thigh,
+            leftLowerLegRot=left_knee,
             selectedRightHand=right_hand,
             selectedLeftHand=left_hand,
         )
 
     if mode == "run_talk":
-        run_freq = t * 8.0
+        cadence = 8.0
+        run_freq = t * cadence
         leg_r = math.sin(run_freq)
         leg_l = -leg_r
         talk_freq = t * 3.0
+        if walk_speed_px and leg_length_px:
+            right_thigh, right_knee = _foot_locked_leg_angles(t, cadence, 0.0, walk_speed_px, leg_length_px, 58.0)
+            left_thigh, left_knee = _foot_locked_leg_angles(t, cadence, math.pi, walk_speed_px, leg_length_px, 58.0)
+        else:
+            right_thigh, right_knee = leg_r * 40, (abs(leg_r) * 58 if leg_r < 0 else 8)
+            left_thigh, left_knee = leg_l * 40, (abs(leg_l) * 58 if leg_l < 0 else 8)
         return RigPose(
             bodyY=abs(math.sin(run_freq)) * -10 + 5,
             bodyRotation=6 + math.sin(run_freq) * 2,
@@ -132,10 +192,10 @@ def calculate_rig_pose(
             rightForearmRot=40 + math.sin(talk_freq) * 10,
             leftArmUpperRot=leg_r * 34 + 10,
             leftForearmRot=max(0, leg_r * 26) + 15,
-            rightThighRot=leg_r * 40,
-            rightLowerLegRot=(abs(leg_r) * 58 if leg_r < 0 else 8),
-            leftThighRot=leg_l * 40,
-            leftLowerLegRot=(abs(leg_l) * 58 if leg_l < 0 else 8),
+            rightThighRot=right_thigh,
+            rightLowerLegRot=right_knee,
+            leftThighRot=left_thigh,
+            leftLowerLegRot=left_knee,
             selectedRightHand=right_hand,
             selectedLeftHand=left_hand,
         )
