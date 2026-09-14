@@ -74,7 +74,14 @@ def _body_landmarks(body: Image.Image):
 
     return {
         "h": h, "w": w, "top": top, "bottom": bottom, "shoulder_row": shoulder_row,
-        "shoulder_half": half_width(shoulder_row + 0.03 * h),
+        # Measured at the exact row build_geometry() places the shoulder joint at
+        # (shoulder_row + 0.04*h) — the silhouette widens fast enough through this
+        # region on some character art (a built-in shoulder cap, not a bare torso)
+        # that even a few rows' difference between where width is measured and
+        # where the joint is placed was leaving the joint well inside the actual
+        # shoulder, causing the arm sprite to be pasted inside the torso's own
+        # shoulder art instead of at its corner.
+        "shoulder_half": half_width(shoulder_row + 0.04 * h),
         "hip_half": half_width(bottom - 0.05 * h),
     }
 
@@ -107,7 +114,7 @@ def build_geometry(parts: dict) -> dict:
         neck_row = lm["shoulder_row"] - 0.25 * (lm["shoulder_row"] - lm["top"])
         neck = (0.0, neck_row - bh)
         shoulder_y = lm["shoulder_row"] + 0.04 * bh - bh
-        shoulder_x = 0.78 * lm["shoulder_half"]
+        shoulder_x = 0.92 * lm["shoulder_half"]
         hip_y = lm["bottom"] - 0.10 * bh - bh
         hip_x = 0.45 * lm["hip_half"]
     else:
