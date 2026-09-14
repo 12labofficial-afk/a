@@ -170,8 +170,12 @@ def calculate_rig_pose(
             # driven directly off right_thigh's own computed curve, not a separate
             # sine, so it stays exactly in phase and shape with however the leg is
             # actually moving (foot-locked stance-then-swing, not a plain sine).
-            leftArmUpperRot=right_thigh * 0.6,
-            leftForearmRot=max(0, right_thigh * 0.4) + 8,
+            # Scaled so the max swing stays within the old ~22 degree amplitude
+            # (right_thigh can reach ~54 degrees) — the earlier 0.6 factor let the
+            # arm swing far enough that the upper-arm sprite's overlap with the
+            # forearm (tuned for small angles) visibly gapped at the shoulder.
+            leftArmUpperRot=right_thigh * 0.4,
+            leftForearmRot=max(0, right_thigh * 0.3) + 8,
             rightThighRot=right_thigh,
             rightLowerLegRot=right_knee,
             leftThighRot=left_thigh,
