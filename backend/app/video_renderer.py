@@ -17,6 +17,37 @@ def rotate_vec(dx, dy, angle_deg):
     return (dx * c - dy * s, dx * s + dy * c)
 
 
+def _rotate_rgba(img: Image.Image, angle_deg: float, center):
+    """
+    Rotates an RGBA sprite without the dark fringe PIL's plain .rotate() leaves along
+    its edge. That fringe comes from resampling straight (non-premultiplied) alpha: a
+    BICUBIC/BILINEAR sample straddling the sprite's silhouette blends its opaque color
+    with the fully-transparent padding's (0,0,0,0) — averaging in that black at full
+    weight even though the padding pixel is invisible — so every rotated edge picks up
+    a thin ring of darkened, partially-transparent pixels. Two such sprites overlapping
+    at a limb joint (e.g. a rotated calf over a thigh) show that ring as a visible seam.
+    Premultiplying by alpha before rotating makes the invisible padding contribute
+    (0,0,0) weighted by its own zero alpha instead of full-strength black, so the
+    un-premultiplied result has no fringe.
+    """
+    r, g, b, a = img.split()
+    rgb = np.asarray(Image.merge("RGB", (r, g, b)), dtype=np.float32)
+    a_arr = np.asarray(a, dtype=np.float32) / 255.0
+    premult = np.clip(rgb * a_arr[..., None], 0, 255).astype(np.uint8)
+    premult_img = Image.fromarray(premult, "RGB")
+
+    rotated_rgb = premult_img.rotate(angle_deg, resample=Image.BICUBIC, center=center)
+    rotated_a = a.rotate(angle_deg, resample=Image.BICUBIC, center=center)
+
+    rgb_rot = np.asarray(rotated_rgb, dtype=np.float32)
+    a_rot = np.asarray(rotated_a, dtype=np.float32) / 255.0
+    safe_a = np.where(a_rot > 1e-3, a_rot, 1.0)[..., None]
+    unpremult = np.clip(rgb_rot / safe_a, 0, 255).astype(np.uint8)
+
+    out = np.dstack([unpremult, np.asarray(rotated_a)])
+    return Image.fromarray(out, "RGBA")
+
+
 def _body_landmarks(body: Image.Image):
     """
     Reads the neck, shoulder line and hip width off the torso art itself.
@@ -301,7 +332,7 @@ class CharacterRenderer:
         padded.paste(scaled, (ox, oy), scaled)
 
         screen_angle = angle_deg if self.facing == 1 else -angle_deg
-        rotated = padded.rotate(-screen_angle, resample=Image.BICUBIC, center=pivot_px)
+        rotated = _rotate_rgba(padded, -screen_angle, pivot_px)
 
         wx = self.screen_anchor[0] + (world_pt[0] * self.facing) * self.scale
         wy = self.screen_anchor[1] + world_pt[1] * self.scale
