@@ -1,20 +1,20 @@
 {
-  "character": "nurse_saree_86481978",
-  "source_sheet": "/root/.claude/uploads/c10e9020-1fbb-542d-be98-153c52802bab/86481978-image.png",
-  "note": "Bind-pose bone hierarchy + per-part attachment data measured directly off this character's own sliced sprites (build_geometry + get_pivot + get_hand_bind_offset), not hand-guessed. Modeled on the DragonBones ske.json structure (bone name/parent/length/transform) studied from the mecha_1004d reference rig, adapted to our anatomical joint names and our hanging-limb (+y) bone convention instead of DragonBones' own +x convention. 'length' is the straight-line bind-pose distance to the next joint down this bone's own chain (0 for a chain's terminal joint); 'transform' is this joint's (x,y) offset from its parent joint, pelvis at the origin.",
+  "character": "nurse_real_loose_parts",
+  "source": "3125e194-image.png (loose/scattered individual-part PNG dump, not the fixed blueprint grid)",
+  "note": "This character's parts arrived as individually-positioned PNG blobs on one canvas rather than the fixed 1:1 blueprint grid, and every future character's parts will arrive the same way -- so this rig is built by reading each part at its OWN NATIVE pixel size straight off the source image (the sizes there are already correct/1:1 relative to each other; do not rescale them to fit a template) and letting build_geometry measure proportions from those native sizes directly, exactly like the existing 'folder of separately exported PNGs' load path. The automatic wrist-pivot detector (_detect_wrist_pivot, which assumes the wrist end has a WIDER cross-section than the finger end) got several of this character's hands backwards: a relaxed hand with fingers curled CLOSED (not splayed open) can be wider at the curled-finger end than at the smooth wrist dome, which is exactly backwards from that assumption. Every hand_variants pivot below was therefore set by eye against the actual art instead, per the instruction to save real per-character data rather than trust one general heuristic for every art style.",
   "bones": [
     {
       "name": "pelvis",
       "parent": null,
-      "length": 1446.25,
+      "length": 718.75,
       "transform": {
         "x": 0.0,
         "y": 0.0
       },
       "slot": "body",
       "display": {
-        "width": 562,
-        "height": 1523,
+        "width": 249,
+        "height": 796,
         "pivot": [
           0.5,
           1.0
@@ -24,10 +24,10 @@
     {
       "name": "neck",
       "parent": "pelvis",
-      "length": 154.56,
+      "length": 183.08,
       "transform": {
         "x": 0.0,
-        "y": -1446.25
+        "y": -718.75
       },
       "slot": "__head__"
     },
@@ -37,39 +37,30 @@
       "length": 0.0,
       "transform": {
         "x": 0.0,
-        "y": -154.56
+        "y": -183.08
       }
     },
     {
       "name": "shoulder_left",
       "parent": "pelvis",
-      "length": 303.75,
+      "length": 238.8,
       "transform": {
-        "x": -191.36,
-        "y": -1361.08
-      },
-      "slot": "arm_right",
-      "display": {
-        "width": 168,
-        "height": 405,
-        "pivot": [
-          0.5,
-          0.0
-        ]
+        "x": -79.12,
+        "y": -661.16
       }
     },
     {
       "name": "elbow_left",
       "parent": "shoulder_left",
-      "length": 233.22,
+      "length": 146.64,
       "transform": {
         "x": 0.0,
-        "y": 303.75
+        "y": 238.8
       },
       "slot": "hand_right",
       "display": {
-        "width": 145,
-        "height": 299,
+        "width": 82,
+        "height": 188,
         "pivot": [
           0.5,
           0.0
@@ -79,10 +70,10 @@
     {
       "name": "wrist_left",
       "parent": "elbow_left",
-      "length": 9.33,
+      "length": 5.87,
       "transform": {
         "x": 0.0,
-        "y": 233.22
+        "y": 146.64
       },
       "slot": "__left_hand__"
     },
@@ -92,39 +83,30 @@
       "length": 0.0,
       "transform": {
         "x": 0.0,
-        "y": 9.33
+        "y": 5.87
       }
     },
     {
       "name": "shoulder_right",
       "parent": "pelvis",
-      "length": 247.5,
+      "length": 238.8,
       "transform": {
-        "x": 191.36,
-        "y": -1361.08
-      },
-      "slot": "arm_left",
-      "display": {
-        "width": 221,
-        "height": 330,
-        "pivot": [
-          0.5,
-          0.0
-        ]
+        "x": 79.12,
+        "y": -661.16
       }
     },
     {
       "name": "elbow_right",
       "parent": "shoulder_right",
-      "length": 261.3,
+      "length": 127.14,
       "transform": {
         "x": 0.0,
-        "y": 247.5
+        "y": 238.8
       },
       "slot": "hand_left",
       "display": {
-        "width": 107,
-        "height": 335,
+        "width": 103,
+        "height": 163,
         "pivot": [
           0.5,
           0.0
@@ -134,10 +116,10 @@
     {
       "name": "wrist_right",
       "parent": "elbow_right",
-      "length": 10.45,
+      "length": 5.09,
       "transform": {
         "x": 0.0,
-        "y": 261.3
+        "y": 127.14
       },
       "slot": "__right_hand__"
     },
@@ -147,7 +129,7 @@
       "length": 0.0,
       "transform": {
         "x": 0.0,
-        "y": 10.45
+        "y": 5.09
       }
     },
     {
@@ -155,27 +137,26 @@
       "parent": "pelvis",
       "length": 0.0,
       "transform": {
-        "x": -116.55,
-        "y": -157.3
-      },
-      "slot": "thigh_right"
-    },
-    {
-      "name": "knee_left",
-      "parent": "hip_left",
-      "length": 209.92,
-      "transform": {
-        "x": 0.0,
-        "y": 0.0
+        "x": -55.8,
+        "y": -80.6
       },
       "slot": "leg_lower_right",
       "display": {
-        "width": 221,
-        "height": 256,
+        "width": 90,
+        "height": 235,
         "pivot": [
           0.5,
           0.0
         ]
+      }
+    },
+    {
+      "name": "knee_left",
+      "parent": "hip_left",
+      "length": 192.7,
+      "transform": {
+        "x": 0.0,
+        "y": 0.0
       }
     },
     {
@@ -184,7 +165,7 @@
       "length": 0.0,
       "transform": {
         "x": 0.0,
-        "y": 209.92
+        "y": 192.7
       }
     },
     {
@@ -192,27 +173,26 @@
       "parent": "pelvis",
       "length": 0.0,
       "transform": {
-        "x": 116.55,
-        "y": -157.3
-      },
-      "slot": "thigh_left"
-    },
-    {
-      "name": "knee_right",
-      "parent": "hip_right",
-      "length": 209.92,
-      "transform": {
-        "x": 0.0,
-        "y": 0.0
+        "x": 55.8,
+        "y": -80.6
       },
       "slot": "leg_lower_left",
       "display": {
-        "width": 222,
-        "height": 256,
+        "width": 91,
+        "height": 238,
         "pivot": [
           0.5,
           0.0
         ]
+      }
+    },
+    {
+      "name": "knee_right",
+      "parent": "hip_right",
+      "length": 195.16,
+      "transform": {
+        "x": 0.0,
+        "y": 0.0
       }
     },
     {
@@ -221,82 +201,90 @@
       "length": 0.0,
       "transform": {
         "x": 0.0,
-        "y": 209.92
+        "y": 195.16
       }
     }
   ],
   "hand_variants": {
-    "right_palm_1": {
-      "width": 150,
-      "height": 173,
+    "left_hand_prop": {
+      "width": 52,
+      "height": 100,
       "pivot": [
-        0.6345,
-        0.1623
+        0.5,
+        0.06
       ],
-      "bind_offset_deg": 15.67
-    },
-    "right_palm_2": {
-      "width": 112,
-      "height": 152,
-      "pivot": [
-        0.5097,
-        0.1431
-      ],
-      "bind_offset_deg": 0.68
-    },
-    "right_palm_3": {
-      "width": 137,
-      "height": 189,
-      "pivot": [
-        0.584,
-        0.1486
-      ],
-      "bind_offset_deg": 1.96
-    },
-    "right_hand_prop": {
-      "width": 54,
-      "height": 58,
-      "pivot": [
-        0.4793,
-        0.1564
-      ],
-      "bind_offset_deg": -0.1
+      "bind_offset_deg": -6.75,
+      "pivot_source": "manual"
     },
     "left_palm_1": {
-      "width": 105,
-      "height": 147,
+      "width": 62,
+      "height": 65,
       "pivot": [
-        0.4829,
-        0.8341
+        0.42,
+        0.06
       ],
-      "bind_offset_deg": 5.83
+      "bind_offset_deg": -15.56,
+      "pivot_source": "manual"
     },
     "left_palm_2": {
-      "width": 140,
-      "height": 190,
+      "width": 83,
+      "height": 55,
       "pivot": [
-        0.6776,
-        0.1561
+        0.9,
+        0.3
       ],
-      "bind_offset_deg": 11.35
+      "bind_offset_deg": 62.78,
+      "pivot_source": "manual"
     },
     "left_palm_3": {
-      "width": 133,
-      "height": 191,
+      "width": 58,
+      "height": 66,
       "pivot": [
-        0.5696,
-        0.1432
+        0.28,
+        0.06
       ],
-      "bind_offset_deg": 4.47
+      "bind_offset_deg": -30.73,
+      "pivot_source": "manual"
     },
-    "left_hand_prop": {
-      "width": 112,
-      "height": 152,
+    "right_hand_prop": {
+      "width": 83,
+      "height": 119,
       "pivot": [
-        0.5097,
-        0.1431
+        0.42,
+        0.06
       ],
-      "bind_offset_deg": 0.68
+      "bind_offset_deg": -15.22,
+      "pivot_source": "manual"
+    },
+    "right_palm_1": {
+      "width": 69,
+      "height": 92,
+      "pivot": [
+        0.55,
+        0.06
+      ],
+      "bind_offset_deg": -7.88,
+      "pivot_source": "manual"
+    },
+    "right_palm_2": {
+      "width": 67,
+      "height": 95,
+      "pivot": [
+        0.5,
+        0.06
+      ],
+      "bind_offset_deg": -20.99,
+      "pivot_source": "manual"
+    },
+    "right_palm_3": {
+      "width": 82,
+      "height": 55,
+      "pivot": [
+        0.9,
+        0.3
+      ],
+      "bind_offset_deg": 61.46,
+      "pivot_source": "manual"
     }
   }
 }
