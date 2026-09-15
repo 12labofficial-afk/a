@@ -115,6 +115,15 @@ def get_hand_bind_offset(img: Image.Image, pivot: tuple) -> float:
     So this measures which way this sprite's own mass points from its pivot, then
     corrects only the DEVIATION from whichever of the two natural directions (down or
     up the axis) is closer — never forcing every hand onto one single direction.
+
+    The direction is read from only the THIRD of the hand's pixels closest to the
+    pivot — the wrist stub that actually continues the forearm's line — rather than
+    the whole hand's mass centroid. A fist or curled hand is laterally lopsided
+    (the thumb/knuckle bulge sits well to one side of the wrist), so its full-mass
+    centroid drifts off-axis even when the wrist stub itself points straight down;
+    using that skewed centroid as "this hand's natural direction" was rotating the
+    whole hand to match the FINGERS' average position instead of keeping the wrist
+    stub aligned with the forearm, which shows up as a visibly bent/kinked wrist.
     """
     import numpy as np
     import math
@@ -124,8 +133,12 @@ def get_hand_bind_offset(img: Image.Image, pivot: tuple) -> float:
     if not alpha.any():
         return 0.0
     ys, xs = np.nonzero(alpha)
-    cx, cy = xs.mean(), ys.mean()
     px, py = pivot[0] * w, pivot[1] * h
+    dists = np.hypot(xs - px, ys - py)
+    near = dists <= np.percentile(dists, 35)
+    if near.sum() < 5:
+        near = np.ones_like(dists, dtype=bool)
+    cx, cy = xs[near].mean(), ys[near].mean()
     ux, uy = cx - px, cy - py
     if ux == 0 and uy == 0:
         return 0.0

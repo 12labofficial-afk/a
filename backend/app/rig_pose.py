@@ -42,7 +42,7 @@ class RigPose:
     rightLowerLegRot: float = 0.0
     leftThighRot: float = 0.0
     leftLowerLegRot: float = 0.0
-    selectedRightHand: str = "right_palm_1"
+    selectedRightHand: str = "right_palm_2"
     selectedLeftHand: str = "left_palm_1"
 
 
@@ -109,7 +109,12 @@ def calculate_rig_pose(
     blink_cycle = t_seconds % 2.6
     is_blinking = force_blink or blink_cycle < 0.20
 
-    right_hand = right_hand_prop or "right_palm_1"
+    # right_palm_1 is a pointing hand (index finger extended sideways) on this
+    # blueprint's convention, not a relaxed resting hand — it belongs only to the
+    # "point" pose, which selects it explicitly below. Every other pose's resting/
+    # default hand must be a hand actually drawn hanging naturally, or the palm's
+    # own rotation fights the forearm's and shows as a bent-looking wrist.
+    right_hand = right_hand_prop or "right_palm_2"
     left_hand = left_hand_prop or "left_palm_1"
 
     if mode == "wave":
