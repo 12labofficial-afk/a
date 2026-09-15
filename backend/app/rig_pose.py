@@ -162,24 +162,20 @@ def calculate_rig_pose(
             headRotation=math.sin(talk_freq) * 3.0 + math.sin(walk_freq * 2) * 1.2,
             headBobY=abs(math.sin(walk_freq)) * -3.5,
             headBlinkClosed=is_blinking,
-            # right arm gestures while talking; left arm counter-swings with the stride.
-            # Kept fairly small on purpose — a wider swing here reads fine on a
-            # broad-shouldered character but visibly crosses into the other arm's
-            # space on a narrower-shouldered one, since both arms attach closer
-            # to the body's centerline.
-            rightArmUpperRot=-15 + math.sin(talk_freq * 1.2) * 10,
-            rightForearmRot=20 + math.sin(talk_freq) * 10,
+            # A real reference walk (a saree/dress character, provided by the user)
+            # keeps both hands close by the hips the whole time — a small sway, not
+            # a wide swinging arc. Both arms toned down to match that: the talking
+            # gesture is now a subtle wrist-level shift rather than a broad wave,
+            # and the counter-swing is barely a lean, not a full pendulum.
+            rightArmUpperRot=-8 + math.sin(talk_freq * 1.2) * 5,
+            rightForearmRot=12 + math.sin(talk_freq) * 6,
             # The left arm counter-swings with the RIGHT leg (real walk-cycle
             # reference data confirms opposite-side arm and leg move together) —
             # driven directly off right_thigh's own computed curve, not a separate
             # sine, so it stays exactly in phase and shape with however the leg is
             # actually moving (foot-locked stance-then-swing, not a plain sine).
-            # Scaled so the max swing stays within the old ~22 degree amplitude
-            # (right_thigh can reach ~54 degrees) — the earlier 0.6 factor let the
-            # arm swing far enough that the upper-arm sprite's overlap with the
-            # forearm (tuned for small angles) visibly gapped at the shoulder.
-            leftArmUpperRot=right_thigh * 0.4,
-            leftForearmRot=max(0, right_thigh * 0.3) + 8,
+            leftArmUpperRot=right_thigh * 0.15,
+            leftForearmRot=max(0, right_thigh * 0.12) + 6,
             rightThighRot=right_thigh,
             rightLowerLegRot=right_knee,
             leftThighRot=left_thigh,
