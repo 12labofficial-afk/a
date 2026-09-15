@@ -162,20 +162,17 @@ def calculate_rig_pose(
             headRotation=math.sin(talk_freq) * 3.0 + math.sin(walk_freq * 2) * 1.2,
             headBobY=abs(math.sin(walk_freq)) * -3.5,
             headBlinkClosed=is_blinking,
-            # A real reference walk (a saree/dress character, provided by the user)
-            # keeps both hands close by the hips the whole time — a small sway, not
-            # a wide swinging arc. Both arms toned down to match that: the talking
-            # gesture is now a subtle wrist-level shift rather than a broad wave,
-            # and the counter-swing is barely a lean, not a full pendulum.
-            rightArmUpperRot=-8 + math.sin(talk_freq * 1.2) * 5,
-            rightForearmRot=12 + math.sin(talk_freq) * 6,
-            # The left arm counter-swings with the RIGHT leg (real walk-cycle
-            # reference data confirms opposite-side arm and leg move together) —
-            # driven directly off right_thigh's own computed curve, not a separate
-            # sine, so it stays exactly in phase and shape with however the leg is
-            # actually moving (foot-locked stance-then-swing, not a plain sine).
-            leftArmUpperRot=right_thigh * 0.15,
-            leftForearmRot=max(0, right_thigh * 0.12) + 6,
+            # The user's own reference video (their tool's actual output, a saree
+            # character walking) shows both hands essentially fixed by the hips —
+            # visibly almost no swing at all across several full gait cycles, just
+            # a faint sway. Arms are now near-static, moving only a couple of
+            # degrees with body sway/talk emphasis, not with a deliberate pendulum
+            # swing — matching what the reference actually shows rather than a
+            # textbook walk-cycle arm swing that doesn't apply to this style.
+            rightArmUpperRot=-5 + math.sin(talk_freq * 1.2) * 2,
+            rightForearmRot=10 + math.sin(talk_freq) * 3,
+            leftArmUpperRot=5 + math.sin(walk_freq) * 2,
+            leftForearmRot=10 + math.sin(walk_freq) * 2,
             rightThighRot=right_thigh,
             rightLowerLegRot=right_knee,
             leftThighRot=left_thigh,
