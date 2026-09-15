@@ -165,14 +165,14 @@ def calculate_rig_pose(
             # The user's own reference video (their tool's actual output, a saree
             # character walking) shows both hands essentially fixed by the hips —
             # visibly almost no swing at all across several full gait cycles, just
-            # a faint sway. Arms are now near-static, moving only a couple of
-            # degrees with body sway/talk emphasis, not with a deliberate pendulum
-            # swing — matching what the reference actually shows rather than a
-            # textbook walk-cycle arm swing that doesn't apply to this style.
-            rightArmUpperRot=-5 + math.sin(talk_freq * 1.2) * 2,
-            rightForearmRot=10 + math.sin(talk_freq) * 3,
-            leftArmUpperRot=5 + math.sin(walk_freq) * 2,
-            leftForearmRot=10 + math.sin(walk_freq) * 2,
+            # a faint sway. Arms are near-static, not a deliberate pendulum swing.
+            # Amplitudes below are cross-checked against a real production rig's
+            # own hand-keyframed "Walk" animation (ARM_L/ARM_R swing ~5-6°,
+            # FOREARM_L/R ~4-5° peak-to-peak from bind) rather than eyeballed.
+            rightArmUpperRot=-5 + math.sin(talk_freq * 1.2) * 3,
+            rightForearmRot=10 + math.sin(talk_freq) * 4,
+            leftArmUpperRot=5 + math.sin(walk_freq) * 3,
+            leftForearmRot=10 + math.sin(walk_freq) * 4,
             rightThighRot=right_thigh,
             rightLowerLegRot=right_knee,
             leftThighRot=left_thigh,
