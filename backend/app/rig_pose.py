@@ -162,9 +162,13 @@ def calculate_rig_pose(
             headRotation=math.sin(talk_freq) * 3.0 + math.sin(walk_freq * 2) * 1.2,
             headBobY=abs(math.sin(walk_freq)) * -3.5,
             headBlinkClosed=is_blinking,
-            # right arm gestures while talking; left arm counter-swings with the stride
-            rightArmUpperRot=-20 + math.sin(talk_freq * 1.2) * 18,
-            rightForearmRot=30 + math.sin(talk_freq) * 16,
+            # right arm gestures while talking; left arm counter-swings with the stride.
+            # Kept fairly small on purpose — a wider swing here reads fine on a
+            # broad-shouldered character but visibly crosses into the other arm's
+            # space on a narrower-shouldered one, since both arms attach closer
+            # to the body's centerline.
+            rightArmUpperRot=-15 + math.sin(talk_freq * 1.2) * 10,
+            rightForearmRot=20 + math.sin(talk_freq) * 10,
             # The left arm counter-swings with the RIGHT leg (real walk-cycle
             # reference data confirms opposite-side arm and leg move together) —
             # driven directly off right_thigh's own computed curve, not a separate
