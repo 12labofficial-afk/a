@@ -1,0 +1,302 @@
+{
+  "character": "nurse_saree_86481978",
+  "source_sheet": "/root/.claude/uploads/c10e9020-1fbb-542d-be98-153c52802bab/86481978-image.png",
+  "note": "Bind-pose bone hierarchy + per-part attachment data measured directly off this character's own sliced sprites (build_geometry + get_pivot + get_hand_bind_offset), not hand-guessed. Modeled on the DragonBones ske.json structure (bone name/parent/length/transform) studied from the mecha_1004d reference rig, adapted to our anatomical joint names and our hanging-limb (+y) bone convention instead of DragonBones' own +x convention. 'length' is the straight-line bind-pose distance to the next joint down this bone's own chain (0 for a chain's terminal joint); 'transform' is this joint's (x,y) offset from its parent joint, pelvis at the origin.",
+  "bones": [
+    {
+      "name": "pelvis",
+      "parent": null,
+      "length": 1446.25,
+      "transform": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "slot": "body",
+      "display": {
+        "width": 562,
+        "height": 1523,
+        "pivot": [
+          0.5,
+          1.0
+        ]
+      }
+    },
+    {
+      "name": "neck",
+      "parent": "pelvis",
+      "length": 154.56,
+      "transform": {
+        "x": 0.0,
+        "y": -1446.25
+      },
+      "slot": "__head__"
+    },
+    {
+      "name": "head_top",
+      "parent": "neck",
+      "length": 0.0,
+      "transform": {
+        "x": 0.0,
+        "y": -154.56
+      }
+    },
+    {
+      "name": "shoulder_left",
+      "parent": "pelvis",
+      "length": 303.75,
+      "transform": {
+        "x": -191.36,
+        "y": -1361.08
+      },
+      "slot": "arm_right",
+      "display": {
+        "width": 168,
+        "height": 405,
+        "pivot": [
+          0.5,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "elbow_left",
+      "parent": "shoulder_left",
+      "length": 233.22,
+      "transform": {
+        "x": 0.0,
+        "y": 303.75
+      },
+      "slot": "hand_right",
+      "display": {
+        "width": 145,
+        "height": 299,
+        "pivot": [
+          0.5,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "wrist_left",
+      "parent": "elbow_left",
+      "length": 9.33,
+      "transform": {
+        "x": 0.0,
+        "y": 233.22
+      },
+      "slot": "__left_hand__"
+    },
+    {
+      "name": "hand_left",
+      "parent": "wrist_left",
+      "length": 0.0,
+      "transform": {
+        "x": 0.0,
+        "y": 9.33
+      }
+    },
+    {
+      "name": "shoulder_right",
+      "parent": "pelvis",
+      "length": 247.5,
+      "transform": {
+        "x": 191.36,
+        "y": -1361.08
+      },
+      "slot": "arm_left",
+      "display": {
+        "width": 221,
+        "height": 330,
+        "pivot": [
+          0.5,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "elbow_right",
+      "parent": "shoulder_right",
+      "length": 261.3,
+      "transform": {
+        "x": 0.0,
+        "y": 247.5
+      },
+      "slot": "hand_left",
+      "display": {
+        "width": 107,
+        "height": 335,
+        "pivot": [
+          0.5,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "wrist_right",
+      "parent": "elbow_right",
+      "length": 10.45,
+      "transform": {
+        "x": 0.0,
+        "y": 261.3
+      },
+      "slot": "__right_hand__"
+    },
+    {
+      "name": "hand_right",
+      "parent": "wrist_right",
+      "length": 0.0,
+      "transform": {
+        "x": 0.0,
+        "y": 10.45
+      }
+    },
+    {
+      "name": "hip_left",
+      "parent": "pelvis",
+      "length": 0.0,
+      "transform": {
+        "x": -116.55,
+        "y": -157.3
+      },
+      "slot": "thigh_right"
+    },
+    {
+      "name": "knee_left",
+      "parent": "hip_left",
+      "length": 209.92,
+      "transform": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "slot": "leg_lower_right",
+      "display": {
+        "width": 221,
+        "height": 256,
+        "pivot": [
+          0.5,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "foot_left",
+      "parent": "knee_left",
+      "length": 0.0,
+      "transform": {
+        "x": 0.0,
+        "y": 209.92
+      }
+    },
+    {
+      "name": "hip_right",
+      "parent": "pelvis",
+      "length": 0.0,
+      "transform": {
+        "x": 116.55,
+        "y": -157.3
+      },
+      "slot": "thigh_left"
+    },
+    {
+      "name": "knee_right",
+      "parent": "hip_right",
+      "length": 209.92,
+      "transform": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "slot": "leg_lower_left",
+      "display": {
+        "width": 222,
+        "height": 256,
+        "pivot": [
+          0.5,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "foot_right",
+      "parent": "knee_right",
+      "length": 0.0,
+      "transform": {
+        "x": 0.0,
+        "y": 209.92
+      }
+    }
+  ],
+  "hand_variants": {
+    "right_palm_1": {
+      "width": 150,
+      "height": 173,
+      "pivot": [
+        0.6345,
+        0.1623
+      ],
+      "bind_offset_deg": 15.67
+    },
+    "right_palm_2": {
+      "width": 112,
+      "height": 152,
+      "pivot": [
+        0.5097,
+        0.1431
+      ],
+      "bind_offset_deg": 0.68
+    },
+    "right_palm_3": {
+      "width": 137,
+      "height": 189,
+      "pivot": [
+        0.584,
+        0.1486
+      ],
+      "bind_offset_deg": 1.96
+    },
+    "right_hand_prop": {
+      "width": 54,
+      "height": 58,
+      "pivot": [
+        0.4793,
+        0.1564
+      ],
+      "bind_offset_deg": -0.1
+    },
+    "left_palm_1": {
+      "width": 105,
+      "height": 147,
+      "pivot": [
+        0.4829,
+        0.8341
+      ],
+      "bind_offset_deg": 5.83
+    },
+    "left_palm_2": {
+      "width": 140,
+      "height": 190,
+      "pivot": [
+        0.6776,
+        0.1561
+      ],
+      "bind_offset_deg": 11.35
+    },
+    "left_palm_3": {
+      "width": 133,
+      "height": 191,
+      "pivot": [
+        0.5696,
+        0.1432
+      ],
+      "bind_offset_deg": 4.47
+    },
+    "left_hand_prop": {
+      "width": 112,
+      "height": 152,
+      "pivot": [
+        0.5097,
+        0.1431
+      ],
+      "bind_offset_deg": 0.68
+    }
+  }
+}
