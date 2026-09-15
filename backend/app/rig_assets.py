@@ -12,7 +12,7 @@ import os
 import re
 from PIL import Image
 
-from app.sheet_template import CELLS
+from app.sheet_template import CELLS, SHEET_RIG_LINES
 
 CANONICAL_SLOTS = list(CELLS.keys())
 
@@ -202,8 +202,24 @@ def _trim_alpha(img: Image.Image) -> Image.Image:
 
 def get_pivot(slot: str, img: Image.Image = None):
     """Fractional (0..1) pivot point used as the rotation/attachment anchor."""
+    if slot in SHEET_RIG_LINES:
+        return SHEET_RIG_LINES[slot]["pivot"]
     if slot in PIVOT_AT_BOTTOM:
         return (0.5, 1.0)
     if slot in HAND_SLOTS and img is not None:
         return _detect_wrist_pivot(img)
     return (0.5, 0.0)
+
+
+def get_bind_tilt(slot: str) -> float:
+    """
+    Degrees to add to this slot's rotation (same sign convention as
+    get_hand_bind_offset and every RigPose angle: negative tips the part toward the
+    viewer's right, positive toward the left) so a pose delta of 0 renders it at the
+    blueprint's own natural bind-pose angle instead of assuming it hangs straight
+    down. Read off that cell's rigging line (see SHEET_RIG_LINES) rather than guessed
+    from any one character's pixels. 0.0 for a slot with no template line
+    (right_hand_prop/left_hand_prop, posed at an arbitrary angle per character).
+    """
+    entry = SHEET_RIG_LINES.get(slot)
+    return -entry["bind_angle_deg"] if entry else 0.0

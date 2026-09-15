@@ -5,10 +5,11 @@ import numpy as np
 from PIL import Image
 
 from app.rig_pose import calculate_rig_pose, RigPose
-from app.rig_assets import get_pivot, get_hand_bind_offset
+from app.rig_assets import get_pivot, get_hand_bind_offset, get_bind_tilt
 from app.sheet_template import (
     SCREEN_LEFT_PARTS, SCREEN_RIGHT_PARTS,
     HAND_VARIANTS_SCREEN_LEFT, HAND_VARIANTS_SCREEN_RIGHT,
+    SHEET_RIG_LINES,
 )
 
 def rotate_vec(dx, dy, angle_deg):
@@ -186,12 +187,16 @@ def compute_limb_points(pose: RigPose, bind: dict):
     dx, dy = rotate_vec(*off("neck", "head_top"), head_angle)
     pts["head_top"] = (pts["neck"][0] + dx, pts["neck"][1] + dy)
 
+    # Each limb bone gets the blueprint's own template-line tilt for whichever sheet
+    # slot it draws (see SHEET_RIG_LINES) added on top of the pose's delta, so a pose
+    # delta of 0 renders the bone at the artist's own natural bind angle instead of
+    # assuming every part hangs perfectly straight down.
     dx, dy = rotate_vec(*off("pelvis", "shoulder_left"), pose.bodyRotation)
     pts["shoulder_left"] = (pts["pelvis"][0] + dx, pts["pelvis"][1] + dy)
-    upper_l = pose.bodyRotation + pose.leftArmUpperRot
+    upper_l = pose.bodyRotation + pose.leftArmUpperRot + get_bind_tilt(SCREEN_LEFT_PARTS["upper_arm"])
     dx, dy = rotate_vec(*off("shoulder_left", "elbow_left"), upper_l)
     pts["elbow_left"] = (pts["shoulder_left"][0] + dx, pts["shoulder_left"][1] + dy)
-    fore_l = upper_l + pose.leftForearmRot
+    fore_l = upper_l + pose.leftForearmRot + get_bind_tilt(SCREEN_LEFT_PARTS["forearm"])
     dx, dy = rotate_vec(*off("elbow_left", "wrist_left"), fore_l)
     pts["wrist_left"] = (pts["elbow_left"][0] + dx, pts["elbow_left"][1] + dy)
     dx, dy = rotate_vec(*off("wrist_left", "hand_left"), fore_l)
@@ -199,10 +204,10 @@ def compute_limb_points(pose: RigPose, bind: dict):
 
     dx, dy = rotate_vec(*off("pelvis", "shoulder_right"), pose.bodyRotation)
     pts["shoulder_right"] = (pts["pelvis"][0] + dx, pts["pelvis"][1] + dy)
-    upper_r = pose.bodyRotation + pose.rightArmUpperRot
+    upper_r = pose.bodyRotation + pose.rightArmUpperRot + get_bind_tilt(SCREEN_RIGHT_PARTS["upper_arm"])
     dx, dy = rotate_vec(*off("shoulder_right", "elbow_right"), upper_r)
     pts["elbow_right"] = (pts["shoulder_right"][0] + dx, pts["shoulder_right"][1] + dy)
-    fore_r = upper_r + pose.rightForearmRot
+    fore_r = upper_r + pose.rightForearmRot + get_bind_tilt(SCREEN_RIGHT_PARTS["forearm"])
     dx, dy = rotate_vec(*off("elbow_right", "wrist_right"), fore_r)
     pts["wrist_right"] = (pts["elbow_right"][0] + dx, pts["elbow_right"][1] + dy)
     dx, dy = rotate_vec(*off("wrist_right", "hand_right"), fore_r)
@@ -210,17 +215,19 @@ def compute_limb_points(pose: RigPose, bind: dict):
 
     dx, dy = off("pelvis", "hip_left")
     pts["hip_left"] = (pts["pelvis"][0] + dx, pts["pelvis"][1] + dy)
-    dx, dy = rotate_vec(*off("hip_left", "knee_left"), pose.leftThighRot)
+    thigh_l = pose.leftThighRot + get_bind_tilt(SCREEN_LEFT_PARTS["thigh"])
+    dx, dy = rotate_vec(*off("hip_left", "knee_left"), thigh_l)
     pts["knee_left"] = (pts["hip_left"][0] + dx, pts["hip_left"][1] + dy)
-    lower_l = pose.leftThighRot + pose.leftLowerLegRot
+    lower_l = thigh_l + pose.leftLowerLegRot + get_bind_tilt(SCREEN_LEFT_PARTS["lower_leg"])
     dx, dy = rotate_vec(*off("knee_left", "foot_left"), lower_l)
     pts["foot_left"] = (pts["knee_left"][0] + dx, pts["knee_left"][1] + dy)
 
     dx, dy = off("pelvis", "hip_right")
     pts["hip_right"] = (pts["pelvis"][0] + dx, pts["pelvis"][1] + dy)
-    dx, dy = rotate_vec(*off("hip_right", "knee_right"), pose.rightThighRot)
+    thigh_r = pose.rightThighRot + get_bind_tilt(SCREEN_RIGHT_PARTS["thigh"])
+    dx, dy = rotate_vec(*off("hip_right", "knee_right"), thigh_r)
     pts["knee_right"] = (pts["hip_right"][0] + dx, pts["hip_right"][1] + dy)
-    lower_r = pose.rightThighRot + pose.rightLowerLegRot
+    lower_r = thigh_r + pose.rightLowerLegRot + get_bind_tilt(SCREEN_RIGHT_PARTS["lower_leg"])
     dx, dy = rotate_vec(*off("knee_right", "foot_right"), lower_r)
     pts["foot_right"] = (pts["knee_right"][0] + dx, pts["knee_right"][1] + dy)
 
@@ -228,8 +235,8 @@ def compute_limb_points(pose: RigPose, bind: dict):
         "torso": pose.bodyRotation, "head": head_angle,
         "upper_arm_left": upper_l, "forearm_left": fore_l, "hand_left": fore_l,
         "upper_arm_right": upper_r, "forearm_right": fore_r, "hand_right": fore_r,
-        "thigh_left": pose.leftThighRot, "lower_leg_left": lower_l,
-        "thigh_right": pose.rightThighRot, "lower_leg_right": lower_r,
+        "thigh_left": thigh_l, "lower_leg_left": lower_l,
+        "thigh_right": thigh_r, "lower_leg_right": lower_r,
     }
     return pts, angles
 
@@ -348,13 +355,15 @@ class CharacterRenderer:
         canvas.alpha_composite(rotated, (paste_x, paste_y))
 
     def _pick_hand(self, preferred: str, variants: list):
+        """Returns (sprite, slot_name) for whichever hand variant actually got used,
+        so its OWN pivot/bind-tilt data is looked up instead of some other variant's."""
         sprite = self.parts.get(preferred)
         if sprite is not None:
-            return sprite
+            return sprite, preferred
         for name in variants:
             if name in self.parts:
-                return self.parts[name]
-        return None
+                return self.parts[name], name
+        return None, None
 
     def draw(self, canvas, pose: RigPose, mouth_shape: str):
         pts, angles = compute_limb_points(pose, self.bind)
@@ -370,15 +379,19 @@ class CharacterRenderer:
                 # leftArmUpperRot/rightArmUpperRot, which drive this same bone's rotation
                 # below) — HAND_VARIANTS_SCREEN_LEFT is what maps that screen side onto the
                 # blueprint's anatomical part names.
-                sprite = self._pick_hand(pose.selectedLeftHand, HAND_VARIANTS_SCREEN_LEFT)
-                pivot = get_pivot("right_palm_1", sprite) if sprite else (0.5, 0.0)
+                sprite, hand_slot = self._pick_hand(pose.selectedLeftHand, HAND_VARIANTS_SCREEN_LEFT)
+                pivot = get_pivot(hand_slot, sprite) if sprite else (0.5, 0.0)
                 if sprite is not None:
-                    angle += get_hand_bind_offset(sprite, pivot)
+                    # A prop hand has no template line (it's posed at an arbitrary angle
+                    # per character), so it still falls back to reading the correction off
+                    # its own pixels; every real palm variant uses the blueprint's own
+                    # fixed bind-tilt for that exact slot instead of guessing per image.
+                    angle += get_bind_tilt(hand_slot) if hand_slot in SHEET_RIG_LINES else get_hand_bind_offset(sprite, pivot)
             elif slot == "__right_hand__":
-                sprite = self._pick_hand(pose.selectedRightHand, HAND_VARIANTS_SCREEN_RIGHT)
-                pivot = get_pivot("left_palm_1", sprite) if sprite else (0.5, 0.0)
+                sprite, hand_slot = self._pick_hand(pose.selectedRightHand, HAND_VARIANTS_SCREEN_RIGHT)
+                pivot = get_pivot(hand_slot, sprite) if sprite else (0.5, 0.0)
                 if sprite is not None:
-                    angle += get_hand_bind_offset(sprite, pivot)
+                    angle += get_bind_tilt(hand_slot) if hand_slot in SHEET_RIG_LINES else get_hand_bind_offset(sprite, pivot)
             else:
                 sprite = self.parts.get(slot)
                 pivot = get_pivot(slot, sprite) if sprite else (0.5, 0.0)
