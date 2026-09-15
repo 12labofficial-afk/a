@@ -100,18 +100,24 @@ def _detect_wrist_pivot(img: Image.Image):
 def get_hand_bind_offset(img: Image.Image, pivot: tuple) -> float:
     """
     Degrees to add to a hand's rotation so it obeys the same "0 rotation = hangs
-    straight down from the pivot" convention every limb sprite is drawn to.
+    naturally from the pivot, along the same axis a hanging limb would" convention.
 
-    Palm art (an open hand, a fist, a pointing finger) is usually drawn hanging down
-    from its wrist like the forearm above it, but not always — e.g. a fist meant for a
-    sideways punch can be drawn rotated ~90° from that. Rotating it by the forearm's
-    angle directly then swings it a further 90° off from where the forearm actually
-    ends up, making the hand look twisted or disconnected. So this measures which way
-    THIS sprite's own mass actually points from its pivot, and returns the correction
-    needed to bring it in line with the down-hanging convention before the pose's own
-    rotation is added on top.
+    Palm art (an open hand, a fist, a pointing finger) is usually drawn hanging along
+    that axis — but not always in the SAME direction along it. Two equally natural,
+    already-correct conventions show up in practice: a hand whose wrist pivot sits at
+    the top of its own crop with the rest of the hand hanging below (the same layout
+    as the forearm above it), and a hand whose pivot sits at the bottom with the palm
+    extending upward toward the wrist above it — just a different artist's crop, not
+    an error. Only a genuine outlier — e.g. a fist meant for a sideways punch, drawn
+    rotated ~90° off this axis — actually needs correcting, or it swings a further 90°
+    off once the forearm's own rotation is added on top and ends up twisted.
+
+    So this measures which way this sprite's own mass points from its pivot, then
+    corrects only the DEVIATION from whichever of the two natural directions (down or
+    up the axis) is closer — never forcing every hand onto one single direction.
     """
     import numpy as np
+    import math
 
     alpha = np.array(img.split()[-1]) > 10
     h, w = alpha.shape
@@ -123,8 +129,11 @@ def get_hand_bind_offset(img: Image.Image, pivot: tuple) -> float:
     ux, uy = cx - px, cy - py
     if ux == 0 and uy == 0:
         return 0.0
-    import math
     angle_from_down = math.degrees(math.atan2(ux, uy))
+    if angle_from_down > 90:
+        angle_from_down -= 180
+    elif angle_from_down <= -90:
+        angle_from_down += 180
     return -angle_from_down
 
 
