@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Touch Trigger</string>
+    <string name="accessibility_service_label">Touch Trigger Automation</string>
+    <string name="accessibility_service_description">Enables Touch Trigger to dispatch automated screen taps upon receiving local network requests.</string>
+    <string name="channel_name">Touch Trigger Service</string>
+    <string name="channel_description">Maintains active background network listener for remote touch triggers</string>
+</resources>

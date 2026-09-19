@@ -1,0 +1,6 @@
+{
+  "name": "Touch Trigger",
+  "description": "Ultra-fast automated single-click touch trigger at movable floating target pointer via Termux local requests",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
