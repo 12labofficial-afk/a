@@ -43,6 +43,7 @@ class FloatingPointerService : Service() {
         private const val NOTIFICATION_ID = 102
         private const val CHANNEL_ID = "touch_trigger_pointer_channel"
         private const val WATCHDOG_INTERVAL_MS = 3000L
+        private const val BUMP_EVERY_N_TICKS = 5 // ~every 15s at the interval above
 
         private val _isPointerVisible = MutableStateFlow(false)
         val isPointerVisible: StateFlow<Boolean> = _isPointerVisible.asStateFlow()
@@ -417,7 +418,39 @@ class FloatingPointerService : Service() {
                         Log.e(TAG, "Failed to re-add drag handle", e)
                     }
                 }
+
+                // Some apps' own hardware-accelerated rendering surface (SurfaceView-based
+                // games especially) can visually cover this overlay even while Android
+                // still considers it perfectly attached - isAttachedToWindow alone can't
+                // see that. Periodically removing and re-adding it nudges it back toward
+                // the front of the Z-order; not guaranteed against every app, but it's the
+                // only lever available for this case since a third-party overlay can't
+                // force itself strictly above another app's own surface.
+                if (tick % BUMP_EVERY_N_TICKS == 0 && attached) {
+                    bumpOverlayZOrder()
+                }
             }
+        }
+    }
+
+    private fun bumpOverlayZOrder() {
+        val view = pointerView ?: return
+        val lp = windowLayoutParams ?: return
+        try {
+            windowManager?.removeViewImmediate(view)
+            windowManager?.addView(view, lp)
+            DiagLog.log("watchdog: bumped crosshair Z-order")
+        } catch (e: Exception) {
+            DiagLog.log("watchdog: Z-order bump FAILED: ${e.javaClass.simpleName}: ${e.message}")
+        }
+
+        val handle = handleView
+        val handleLp = handleLayoutParams
+        if (handle != null && handleLp != null && handle.isAttachedToWindow) {
+            try {
+                windowManager?.removeViewImmediate(handle)
+                windowManager?.addView(handle, handleLp)
+            } catch (_: Exception) {}
         }
     }
 
@@ -431,6 +464,7 @@ class FloatingPointerService : Service() {
         view.getLocationOnScreen(loc)
         val centerX = loc[0] + view.width / 2f
         val centerY = loc[1] + view.height / 2f
+        DiagLog.log("reportActualPosition: ($centerX, $centerY)")
         hasUserSetPosition = true
         savedX = centerX
         savedY = centerY
