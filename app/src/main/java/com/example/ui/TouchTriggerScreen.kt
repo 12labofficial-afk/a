@@ -291,55 +291,12 @@ fun TouchTriggerScreen(
                 }
             }
 
-            // 2b. Touch Speed Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Timer,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Touch Speed",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                            )
-                        }
-                        Text(
-                            text = "${uiState.durationMs} ms",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Slider(
-                        value = uiState.durationMs.toFloat(),
-                        onValueChange = { viewModel.setDuration(it.toLong()) },
-                        valueRange = 1f..100f,
-                        modifier = Modifier.testTag("duration_slider")
-                    )
-                    Text(
-                        text = "Lower = faster taps. Going under ~8ms can make some apps miss the touch entirely.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-            }
+            // 2b. Touch Speed Card - collapsed by default so it doesn't take permanent
+            // space on the main screen; the current value still shows in the header.
+            TouchSpeedCard(
+                durationMs = uiState.durationMs,
+                onDurationChange = { viewModel.setDuration(it) }
+            )
 
             // 3. The ONLY Single Trigger Command Card
             Card(
@@ -636,6 +593,77 @@ fun AccessibilityStatusCard(
                     text = "Accessibility Service Ready & Active",
                     style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                     color = Color(0xFF1B5E20)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TouchSpeedCard(
+    durationMs: Long,
+    onDurationChange: (Long) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Timer,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Touch Speed",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${durationMs} ms",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (expanded) "Hide" else "Change",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            if (expanded) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Slider(
+                    value = durationMs.toFloat(),
+                    onValueChange = { onDurationChange(it.toLong()) },
+                    valueRange = 1f..100f,
+                    modifier = Modifier.testTag("duration_slider")
+                )
+                Text(
+                    text = "Lower = faster taps. Going under ~8ms can make some apps miss the touch entirely.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
                 )
             }
         }

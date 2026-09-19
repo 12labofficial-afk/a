@@ -48,6 +48,7 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
 
     init {
         DiagLog.init(application)
+        DiagLog.log("ViewModel init  pid=${android.os.Process.myPid()}")
 
         // Must happen before anything subscribes to FloatingPointerService.pointerCoordinates
         // below, otherwise that flow's still-default (540, 1200) value would immediately
@@ -95,6 +96,7 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
         // Observe accessibility connection state
         viewModelScope.launch {
             TouchAccessibilityService.isServiceConnected.collect { connected ->
+                DiagLog.log("Accessibility connected state changed: $connected")
                 _uiState.update { it.copy(isAccessibilityEnabled = connected) }
             }
         }
@@ -156,6 +158,7 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun toggleFloatingPointer(context: Context) {
+        DiagLog.log("toggleFloatingPointer called  currentlyVisible=${_uiState.value.isFloatingPointerVisible}")
         checkOverlayPermission()
         if (!_uiState.value.isOverlayPermissionGranted) {
             requestOverlayPermission(context)
@@ -235,6 +238,7 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
      * it, the floating pointer overlay - the whole app's active behavior in one flip. */
     fun toggleServer(context: Context) {
         val currentState = _uiState.value
+        DiagLog.log("toggleServer called  currentlyRunning=${currentState.isServerRunning}")
         if (currentState.isServerRunning) {
             pointerVisibleBeforeDisable = currentState.isFloatingPointerVisible
             if (currentState.isFloatingPointerVisible) {
@@ -290,6 +294,7 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
     fun testTap(context: Context) {
         val state = _uiState.value
         val startTime = System.currentTimeMillis()
+        DiagLog.log("testTap called  target=(${state.targetX}, ${state.targetY})  duration=${state.durationMs}ms")
 
         com.example.service.FloatingPointerService.notifyTriggerDispatched()
 

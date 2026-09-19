@@ -3,6 +3,7 @@ package com.example.server
 import android.util.Log
 import com.example.model.TriggerLog
 import com.example.service.TouchAccessibilityService
+import com.example.util.DiagLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -63,6 +64,7 @@ class TouchTriggerServer(
                 }
                 isRunning = true
                 Log.i(TAG, "TouchTriggerServer started on port $port")
+                DiagLog.log("Server started on port $port")
                 withContext(Dispatchers.Main) {
                     onStatusChange?.invoke(true, "Server listening on port $port")
                 }
@@ -82,6 +84,7 @@ class TouchTriggerServer(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start server on port $port", e)
+                DiagLog.log("Server FAILED to start on port $port: ${e.javaClass.simpleName}: ${e.message}")
                 isRunning = false
                 withContext(Dispatchers.Main) {
                     onStatusChange?.invoke(false, "Error: ${e.localizedMessage}")
@@ -98,6 +101,7 @@ class TouchTriggerServer(
             serverJob?.cancel()
             serverJob = null
             Log.i(TAG, "TouchTriggerServer stopped")
+            DiagLog.log("Server stopped")
             onStatusChange?.invoke(false, "Server stopped")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping server", e)
@@ -131,6 +135,7 @@ class TouchTriggerServer(
             val path = rawUri.substringBefore("?")
             val queryString = if (rawUri.contains("?")) rawUri.substringAfter("?") else ""
             val queryParams = parseQueryParams(queryString)
+            DiagLog.log("HTTP request  from=$clientIp  path=$rawUri")
 
             when (path) {
                 "/trigger", "/tap" -> {
@@ -221,6 +226,7 @@ class TouchTriggerServer(
         val isServiceAvailable = TouchAccessibilityService.instance != null
         if (!isServiceAvailable) {
             val latency = System.currentTimeMillis() - startTime
+            DiagLog.log("executeTapAndRespond: accessibility service NOT connected, rejecting ($x, $y)")
             val errorJson = """
                 {
                     "success": false,
@@ -245,10 +251,12 @@ class TouchTriggerServer(
         }
 
         com.example.service.FloatingPointerService.notifyTriggerDispatched()
+        DiagLog.log("executeTapAndRespond: dispatching tap at ($x, $y) duration=${duration}ms")
 
         TouchAccessibilityService.performTap(x, y, duration) { success, message ->
             scope.launch {
                 val latency = System.currentTimeMillis() - startTime
+                DiagLog.log("executeTapAndRespond: result success=$success  message=$message")
                 val log = TriggerLog(
                     id = UUID.randomUUID().toString(),
                     timestamp = System.currentTimeMillis(),
@@ -281,8 +289,10 @@ class TouchTriggerServer(
     /** Waits [delaySeconds] then dispatches the tap without an HTTP response to wait on -
      * the client already got its "scheduled" reply, so this only logs the outcome. */
     private fun scheduleDelayedTap(x: Float, y: Float, duration: Long, delaySeconds: Float) {
+        DiagLog.log("scheduleDelayedTap: waiting ${delaySeconds}s before tapping ($x, $y)")
         scope.launch {
             delay((delaySeconds * 1000).toLong())
+            DiagLog.log("scheduleDelayedTap: delay elapsed, dispatching now")
 
             val isServiceAvailable = TouchAccessibilityService.instance != null
             if (!isServiceAvailable) {
