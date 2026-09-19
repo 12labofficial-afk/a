@@ -26,7 +26,7 @@ data class UiState(
     val port: Int = 8080,
     val targetX: Float = 540f,
     val targetY: Float = 1200f,
-    val durationMs: Long = 30L,
+    val durationMs: Long = 10L,
     val isServerRunning: Boolean = false,
     val isAccessibilityEnabled: Boolean = false,
     val isOverlayPermissionGranted: Boolean = false,
@@ -60,7 +60,7 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
         // screen center every time the process is restarted (the app being killed in
         // the background and relaunched is common - see the battery optimization card).
         val persistedPosition = TouchTriggerPrefs.loadPosition(application)
-        val persistedDuration = TouchTriggerPrefs.loadDuration(application, 30L)
+        val persistedDuration = TouchTriggerPrefs.loadDuration(application, 10L)
         val persistedPort = TouchTriggerPrefs.loadPort(application, 8080)
 
         _uiState.update {
@@ -224,11 +224,21 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
         context.startActivity(intent)
     }
 
+    /** Whether the floating pointer was showing right before the header switch turned
+     * everything off, so turning it back on can restore it too. */
+    private var pointerVisibleBeforeDisable = false
+
+    /** Master on/off switch (header toggle): stops/starts the trigger server and, with
+     * it, the floating pointer overlay - the whole app's active behavior in one flip. */
     fun toggleServer(context: Context) {
         val currentState = _uiState.value
         if (currentState.isServerRunning) {
+            pointerVisibleBeforeDisable = currentState.isFloatingPointerVisible
+            if (currentState.isFloatingPointerVisible) {
+                com.example.service.FloatingPointerService.hide(context)
+            }
             TriggerForegroundService.stopService(context)
-            _uiState.update { it.copy(feedbackMessage = "Server stopped") }
+            _uiState.update { it.copy(feedbackMessage = "Touch Trigger turned off") }
         } else {
             TriggerForegroundService.startService(
                 context = context,
@@ -238,7 +248,10 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
                 duration = currentState.durationMs
             )
             observeServerLogs()
-            _uiState.update { it.copy(feedbackMessage = "Server started on port ${currentState.port}") }
+            if (pointerVisibleBeforeDisable) {
+                com.example.service.FloatingPointerService.show(context)
+            }
+            _uiState.update { it.copy(feedbackMessage = "Touch Trigger turned on") }
         }
     }
 
@@ -262,7 +275,10 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun setDuration(durationMs: Long) {
-        val duration = durationMs.coerceIn(5L, 1000L)
+        // Android's own dispatchGesture needs a fraction of a frame to register a stroke
+        // as a valid tap; going below ~1ms isn't meaningfully faster and some apps'
+        // gesture detectors may simply drop touches that short, so 1ms is the floor.
+        val duration = durationMs.coerceIn(1L, 1000L)
         _uiState.update { it.copy(durationMs = duration) }
         TriggerForegroundService.updateCoordinates(_uiState.value.targetX, _uiState.value.targetY, duration)
         TouchTriggerPrefs.saveDuration(getApplication(), duration)

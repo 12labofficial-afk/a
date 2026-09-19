@@ -28,7 +28,7 @@ class TouchTriggerServer(
     var port: Int = 8080,
     var targetX: Float = 540f,
     var targetY: Float = 1200f,
-    var tapDurationMs: Long = 30L
+    var tapDurationMs: Long = 10L
 ) {
     companion object {
         private const val TAG = "TouchTriggerServer"

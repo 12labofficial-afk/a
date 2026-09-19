@@ -102,7 +102,7 @@ class TriggerForegroundService : Service() {
             ACTION_UPDATE_CONFIG -> {
                 val x = intent.getFloatExtra(EXTRA_TARGET_X, serverInstance?.targetX ?: 540f)
                 val y = intent.getFloatExtra(EXTRA_TARGET_Y, serverInstance?.targetY ?: 1200f)
-                val duration = intent.getLongExtra(EXTRA_DURATION, serverInstance?.tapDurationMs ?: 30L)
+                val duration = intent.getLongExtra(EXTRA_DURATION, serverInstance?.tapDurationMs ?: 10L)
                 updateCoordinates(x, y, duration)
             }
 
@@ -110,7 +110,7 @@ class TriggerForegroundService : Service() {
                 val port = intent?.getIntExtra(EXTRA_PORT, 8080) ?: 8080
                 val targetX = intent?.getFloatExtra(EXTRA_TARGET_X, 540f) ?: 540f
                 val targetY = intent?.getFloatExtra(EXTRA_TARGET_Y, 1200f) ?: 1200f
-                val duration = intent?.getLongExtra(EXTRA_DURATION, 30L) ?: 30L
+                val duration = intent?.getLongExtra(EXTRA_DURATION, 10L) ?: 10L
 
                 startForeground(NOTIFICATION_ID, buildNotification("Listening on port $port..."))
                 acquireLocks()

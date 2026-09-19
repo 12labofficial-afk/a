@@ -41,10 +41,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -120,6 +122,17 @@ fun TouchTriggerScreen(
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                         )
                     }
+                },
+                actions = {
+                    // Master on/off: stops the server and hides the floating pointer in
+                    // one flip, instead of having to toggle each piece separately.
+                    Switch(
+                        checked = uiState.isServerRunning,
+                        onCheckedChange = { viewModel.toggleServer(context) },
+                        modifier = Modifier
+                            .padding(end = 12.dp)
+                            .testTag("app_enabled_switch")
+                    )
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -273,6 +286,56 @@ fun TouchTriggerScreen(
                             }
                         }
                     }
+                }
+            }
+
+            // 2b. Touch Speed Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Timer,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Touch Speed",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                        Text(
+                            text = "${uiState.durationMs} ms",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Slider(
+                        value = uiState.durationMs.toFloat(),
+                        onValueChange = { viewModel.setDuration(it.toLong()) },
+                        valueRange = 1f..100f,
+                        modifier = Modifier.testTag("duration_slider")
+                    )
+                    Text(
+                        text = "Lower = faster taps. Going under ~8ms can make some apps miss the touch entirely.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
                 }
             }
 
