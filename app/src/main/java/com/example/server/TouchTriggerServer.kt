@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -136,8 +137,27 @@ class TouchTriggerServer(
                     val x = queryParams["x"]?.toFloatOrNull() ?: targetX
                     val y = queryParams["y"]?.toFloatOrNull() ?: targetY
                     val duration = queryParams["duration"]?.toLongOrNull() ?: tapDurationMs
+                    // e.g. "?delay=5" -> tap fires 5s after this request, giving time to
+                    // switch to the target app and watch "Show taps" to confirm it landed.
+                    // No delay param -> fires immediately, same as before.
+                    val delaySeconds = queryParams["delay"]?.toFloatOrNull()?.coerceIn(0f, 300f) ?: 0f
 
-                    executeTapAndRespond(socket, startTime, clientIp, x, y, duration)
+                    if (delaySeconds > 0f) {
+                        scheduleDelayedTap(x, y, duration, delaySeconds)
+                        val responseJson = """
+                            {
+                                "success": true,
+                                "scheduled": true,
+                                "delay_seconds": $delaySeconds,
+                                "x": $x,
+                                "y": $y,
+                                "message": "Tap scheduled in ${delaySeconds}s"
+                            }
+                        """.trimIndent()
+                        sendResponse(socket.getOutputStream(), 200, "OK", responseJson)
+                    } else {
+                        executeTapAndRespond(socket, startTime, clientIp, x, y, duration)
+                    }
                 }
 
                 "/ping" -> {
@@ -256,6 +276,49 @@ class TouchTriggerServer(
             }
         """.trimIndent()
         sendResponse(socket.getOutputStream(), 200, "OK", successJson)
+    }
+
+    /** Waits [delaySeconds] then dispatches the tap without an HTTP response to wait on -
+     * the client already got its "scheduled" reply, so this only logs the outcome. */
+    private fun scheduleDelayedTap(x: Float, y: Float, duration: Long, delaySeconds: Float) {
+        scope.launch {
+            delay((delaySeconds * 1000).toLong())
+
+            val isServiceAvailable = TouchAccessibilityService.instance != null
+            if (!isServiceAvailable) {
+                _logsFlow.emit(
+                    TriggerLog(
+                        id = UUID.randomUUID().toString(),
+                        timestamp = System.currentTimeMillis(),
+                        clientIp = "Scheduled (${delaySeconds}s)",
+                        x = x,
+                        y = y,
+                        isSuccess = false,
+                        latencyMs = (delaySeconds * 1000).toLong(),
+                        message = "Failed: Accessibility Service not enabled"
+                    )
+                )
+                return@launch
+            }
+
+            com.example.service.FloatingPointerService.notifyTriggerDispatched()
+            TouchAccessibilityService.performTap(x, y, duration) { success, message ->
+                scope.launch {
+                    _logsFlow.emit(
+                        TriggerLog(
+                            id = UUID.randomUUID().toString(),
+                            timestamp = System.currentTimeMillis(),
+                            clientIp = "Scheduled (${delaySeconds}s)",
+                            x = x,
+                            y = y,
+                            isSuccess = success,
+                            latencyMs = (delaySeconds * 1000).toLong(),
+                            message = message
+                        )
+                    )
+                }
+            }
+        }
     }
 
     private fun parseQueryParams(queryString: String): Map<String, String> {
