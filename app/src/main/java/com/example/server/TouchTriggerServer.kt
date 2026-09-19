@@ -27,8 +27,7 @@ class TouchTriggerServer(
     var port: Int = 8080,
     var targetX: Float = 540f,
     var targetY: Float = 1200f,
-    var tapDurationMs: Long = 30L,
-    var authToken: String = ""
+    var tapDurationMs: Long = 30L
 ) {
     companion object {
         private const val TAG = "TouchTriggerServer"
@@ -127,32 +126,13 @@ class TouchTriggerServer(
                 return
             }
 
-            val method = parts[0]
             val rawUri = parts[1]
             val path = rawUri.substringBefore("?")
             val queryString = if (rawUri.contains("?")) rawUri.substringAfter("?") else ""
             val queryParams = parseQueryParams(queryString)
-            val headers = readHeaders(reader)
 
             when (path) {
                 "/trigger", "/tap" -> {
-                    if (method != "POST") {
-                        sendResponse(
-                            socket.getOutputStream(), 405, "Method Not Allowed",
-                            """{"error":"Use POST for $path"}"""
-                        )
-                        return
-                    }
-
-                    val providedToken = headers["x-auth-token"] ?: queryParams["token"]
-                    if (authToken.isBlank() || providedToken != authToken) {
-                        sendResponse(
-                            socket.getOutputStream(), 401, "Unauthorized",
-                            """{"error":"Missing or invalid auth token"}"""
-                        )
-                        return
-                    }
-
                     val x = queryParams["x"]?.toFloatOrNull() ?: targetX
                     val y = queryParams["y"]?.toFloatOrNull() ?: targetY
                     val duration = queryParams["duration"]?.toLongOrNull() ?: tapDurationMs
@@ -190,12 +170,12 @@ class TouchTriggerServer(
                             "current_target": {"x": $targetX, "y": $targetY},
                             "accessibility_active": $isAccessibility,
                             "endpoints": {
-                                "trigger": "POST /trigger (tap at preset x, y, requires X-Auth-Token header)",
-                                "tap": "POST /tap?x={x}&y={y} (tap at custom coordinates, requires X-Auth-Token header)",
+                                "trigger": "/trigger (tap at preset x, y)",
+                                "tap": "/tap?x={x}&y={y} (tap at custom coordinates)",
                                 "status": "/status (view server & accessibility status)",
                                 "ping": "/ping (measure response time)"
                             },
-                            "termux_example": "curl -s -X POST -H \"X-Auth-Token: <token from app>\" http://${socket.localAddress.hostAddress}:$port/trigger"
+                            "termux_example": "curl -s http://${socket.localAddress.hostAddress}:$port/trigger"
                         }
                     """.trimIndent()
                     sendResponse(socket.getOutputStream(), 200, "OK", infoJson)
@@ -276,19 +256,6 @@ class TouchTriggerServer(
             }
         """.trimIndent()
         sendResponse(socket.getOutputStream(), 200, "OK", successJson)
-    }
-
-    private fun readHeaders(reader: BufferedReader): Map<String, String> {
-        val headers = mutableMapOf<String, String>()
-        var line = reader.readLine()
-        while (!line.isNullOrEmpty()) {
-            val idx = line.indexOf(":")
-            if (idx > 0) {
-                headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
-            }
-            line = reader.readLine()
-        }
-        return headers
     }
 
     private fun parseQueryParams(queryString: String): Map<String, String> {

@@ -15,7 +15,6 @@ import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.server.TouchTriggerServer
-import com.example.util.AuthToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -128,8 +127,7 @@ class TriggerForegroundService : Service() {
                 port = port,
                 targetX = targetX,
                 targetY = targetY,
-                tapDurationMs = duration,
-                authToken = AuthToken.getOrCreate(applicationContext)
+                tapDurationMs = duration
             )
         } else {
             serverInstance?.port = port

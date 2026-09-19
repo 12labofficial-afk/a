@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
     viewModel.checkAccessibilityStatus()
     viewModel.refreshNetworkInfo()
     viewModel.checkOverlayPermission()
+    viewModel.checkBatteryOptimizationStatus()
   }
 }
 

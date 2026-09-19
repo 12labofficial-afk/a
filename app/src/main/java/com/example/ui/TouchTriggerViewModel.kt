@@ -3,13 +3,13 @@ package com.example.ui
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.model.TriggerLog
 import com.example.service.TouchAccessibilityService
 import com.example.service.TriggerForegroundService
-import com.example.util.AuthToken
 import com.example.util.NetworkUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,14 +29,14 @@ data class UiState(
     val isServerRunning: Boolean = false,
     val isAccessibilityEnabled: Boolean = false,
     val isOverlayPermissionGranted: Boolean = false,
+    val isIgnoringBatteryOptimizations: Boolean = false,
     val isFloatingPointerVisible: Boolean = false,
     val screenWidthPx: Int = 1080,
     val screenHeightPx: Int = 2400,
     val logs: List<TriggerLog> = emptyList(),
     val isPositionPickerOpen: Boolean = false,
     val feedbackMessage: String? = null,
-    val lastExecutionTimeMs: Long? = null,
-    val authToken: String = ""
+    val lastExecutionTimeMs: Long? = null
 )
 
 class TouchTriggerViewModel(application: Application) : AndroidViewModel(application) {
@@ -55,14 +55,14 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
                 screenWidthPx = w,
                 screenHeightPx = h,
                 targetX = (w / 2).toFloat(),
-                targetY = (h / 2).toFloat(),
-                authToken = AuthToken.getOrCreate(application)
+                targetY = (h / 2).toFloat()
             )
         }
 
         refreshNetworkInfo()
         checkAccessibilityStatus()
         checkOverlayPermission()
+        checkBatteryOptimizationStatus()
 
         // Observe foreground service state
         viewModelScope.launch {
@@ -106,6 +106,30 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
     fun requestOverlayPermission(context: Context) {
         val intent = Intent(
             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            android.net.Uri.parse("package:${context.packageName}")
+        ).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(intent)
+    }
+
+    /**
+     * Whether the OS is currently allowed to background-kill this app to save power.
+     * On OEM skins with aggressive app killers (MIUI, ColorOS, FuntouchOS, ...) this is
+     * the single biggest reason the server/accessibility service stop working the moment
+     * the user switches to another app - foreground services and wake locks alone don't
+     * reliably survive it.
+     */
+    fun checkBatteryOptimizationStatus() {
+        val context = getApplication<Application>()
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val ignoring = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+        _uiState.update { it.copy(isIgnoringBatteryOptimizations = ignoring) }
+    }
+
+    fun requestIgnoreBatteryOptimizations(context: Context) {
+        val intent = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
             android.net.Uri.parse("package:${context.packageName}")
         ).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK

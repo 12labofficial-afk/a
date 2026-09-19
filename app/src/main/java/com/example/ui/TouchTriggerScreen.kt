@@ -96,11 +96,10 @@ fun TouchTriggerScreen(
 
     var isViaWifiMode by remember { mutableStateOf(false) }
 
-    val authHeader = "-H \"X-Auth-Token: ${uiState.authToken}\""
     val activeCommand = if (isViaWifiMode) {
-        "curl -s -X POST $authHeader \"http://${uiState.ipAddress}:${uiState.port}/trigger\""
+        "curl -s \"http://${uiState.ipAddress}:${uiState.port}/trigger\""
     } else {
-        "curl -s -X POST $authHeader \"http://127.0.0.1:${uiState.port}/trigger\""
+        "curl -s \"http://127.0.0.1:${uiState.port}/trigger\""
     }
 
     Scaffold(
@@ -144,6 +143,14 @@ fun TouchTriggerScreen(
                 isServiceEnabled = uiState.isAccessibilityEnabled,
                 onOpenSettings = { viewModel.openAccessibilitySettings(context) }
             )
+
+            // 1b. Battery Optimization Banner - biggest reason the server/pointer stop
+            // working after switching to another app on MIUI/ColorOS/FuntouchOS phones
+            if (!uiState.isIgnoringBatteryOptimizations) {
+                BatteryOptimizationCard(
+                    onRequestExemption = { viewModel.requestIgnoreBatteryOptimizations(context) }
+                )
+            }
 
             // 2. Main Target Position & Floating Icon Card
             Card(
@@ -561,6 +568,53 @@ fun AccessibilityStatusCard(
                     style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                     color = Color(0xFF1B5E20)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun BatteryOptimizationCard(
+    onRequestExemption: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = Color(0xFFE65100),
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Battery Optimization Active",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = Color(0xFFE65100)
+                )
+                Text(
+                    text = "Phone may kill this app in the background. Allow it to run unrestricted so taps keep working after switching apps.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFBF360C)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = onRequestExemption,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.testTag("request_battery_optimization_button")
+            ) {
+                Text("Allow", color = Color.White)
             }
         }
     }

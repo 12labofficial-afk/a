@@ -1,6 +1,9 @@
 package com.example.service
 
 import android.animation.ValueAnimator
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -15,6 +18,8 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,6 +30,8 @@ class FloatingPointerService : Service() {
         private const val TAG = "FloatingPointerService"
         const val ACTION_SHOW = "com.example.service.ACTION_SHOW_POINTER"
         const val ACTION_HIDE = "com.example.service.ACTION_HIDE_POINTER"
+        private const val NOTIFICATION_ID = 102
+        private const val CHANNEL_ID = "touch_trigger_pointer_channel"
 
         private val _isPointerVisible = MutableStateFlow(false)
         val isPointerVisible: StateFlow<Boolean> = _isPointerVisible.asStateFlow()
@@ -73,7 +80,11 @@ class FloatingPointerService : Service() {
             val intent = Intent(context, FloatingPointerService::class.java).apply {
                 action = ACTION_SHOW
             }
-            context.startService(intent)
+            // Started as a foreground service (see onStartCommand) so OEM background-app
+            // killers (MIUI, ColorOS, FuntouchOS, ...) don't reclaim it - and with it the
+            // whole process, including the accessibility service - a few seconds after the
+            // user switches away to the app they actually want to tap in.
+            ContextCompat.startForegroundService(context, intent)
         }
 
         fun hide(context: Context) {
@@ -98,28 +109,55 @@ class FloatingPointerService : Service() {
         super.onCreate()
         instance = this
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_HIDE -> {
                 removePointer()
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
             ACTION_SHOW, null -> {
-                showPointer()
+                if (!Settings.canDrawOverlays(this)) {
+                    Log.w(TAG, "Cannot draw overlays: Permission not granted")
+                    stopSelf()
+                } else {
+                    startForeground(NOTIFICATION_ID, buildNotification())
+                    showPointer()
+                }
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun showPointer() {
-        if (!Settings.canDrawOverlays(this)) {
-            Log.w(TAG, "Cannot draw overlays: Permission not granted")
-            stopSelf()
-            return
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Floating Pointer",
+                NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                description = "Shows while the floating touch target overlay is active"
+                setShowBadge(false)
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
         }
+    }
 
+    private fun buildNotification(): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Touch Trigger pointer active")
+            .setContentText("Floating target overlay is showing")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .build()
+    }
+
+    private fun showPointer() {
         if (pointerView != null) return
 
         val displayMetrics = resources.displayMetrics
