@@ -163,7 +163,12 @@ class FloatingPointerService : Service() {
                 }
             }
         }
-        return START_NOT_STICKY
+        // STICKY, not NOT_STICKY: heavy foreground apps (games especially) can still
+        // make the OS reclaim this service's process under memory pressure even while
+        // it's a foreground service. NOT_STICKY meant it then stayed dead until the user
+        // manually reopened this app - STICKY makes Android redeliver a null Intent here,
+        // which the ACTION_SHOW branch above already treats as "show the pointer again".
+        return START_STICKY
     }
 
     private fun createNotificationChannel() {
