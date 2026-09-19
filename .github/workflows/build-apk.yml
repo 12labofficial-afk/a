@@ -26,8 +26,9 @@ jobs:
 
       - name: Accept licenses & install required SDK platform / build-tools
         run: |
-          SDKMANAGER=$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -maxdepth 2 -name sdkmanager | sort | tail -1)
+          SDKMANAGER=$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort | tail -1)
           echo "Using sdkmanager: $SDKMANAGER"
+          test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
