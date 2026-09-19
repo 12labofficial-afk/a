@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -177,6 +178,45 @@ class FloatingPointerService : Service() {
         return START_STICKY
     }
 
+    /**
+     * Fires on rotation (and other config changes) while the pointer is already showing.
+     * showPointer()'s clamp only runs when the window is first created, so without this,
+     * an already-visible pointer keeps its old absolute x/y across a rotation - which can
+     * land well outside the new (rotated) screen bounds if the app that's now in front
+     * forces a different orientation than whatever was active when the position was set.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        DiagLog.log("onConfigurationChanged  orientation=${newConfig.orientation}")
+        reclampPointerToScreen()
+    }
+
+    private fun reclampPointerToScreen() {
+        val view = pointerView ?: return
+        val lp = windowLayoutParams ?: return
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        val screenHeight = displayMetrics.heightPixels
+        val viewSizePx = view.width.takeIf { it > 0 } ?: (44 * displayMetrics.density).toInt()
+        val maxX = (screenWidth - viewSizePx).coerceAtLeast(0)
+        val maxY = (screenHeight - viewSizePx).coerceAtLeast(0)
+        val newX = lp.x.coerceIn(0, maxX)
+        val newY = lp.y.coerceIn(0, maxY)
+
+        if (newX == lp.x && newY == lp.y) return
+
+        lp.x = newX
+        lp.y = newY
+        try {
+            windowManager?.updateViewLayout(view, lp)
+            DiagLog.log("reclampPointerToScreen: moved to ($newX, $newY) for screen ${screenWidth}x$screenHeight")
+        } catch (e: Exception) {
+            DiagLog.log("reclampPointerToScreen: updateViewLayout FAILED: ${e.javaClass.simpleName}: ${e.message}")
+        }
+        repositionHandle()
+        view.post { reportActualPosition(view) }
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -222,16 +262,24 @@ class FloatingPointerService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
+        // Clamp to the CURRENT screen bounds, not just whatever was saved: if the target
+        // app opened in a different orientation (e.g. it forces landscape while the
+        // position was last set in portrait), a stale absolute coordinate can land well
+        // outside the new screen entirely - combined with FLAG_LAYOUT_NO_LIMITS below,
+        // that means the pointer silently renders off-screen instead of being clipped.
+        val maxX = (screenWidth - viewSizePx).coerceAtLeast(0)
+        val maxY = (screenHeight - viewSizePx).coerceAtLeast(0)
         val startScreenX = if (hasUserSetPosition) {
-            (savedX - viewSizePx / 2f).toInt()
+            (savedX - viewSizePx / 2f).toInt().coerceIn(0, maxX)
         } else {
             (screenWidth - viewSizePx) / 2
         }
         val startScreenY = if (hasUserSetPosition) {
-            (savedY - viewSizePx / 2f).toInt()
+            (savedY - viewSizePx / 2f).toInt().coerceIn(0, maxY)
         } else {
             (screenHeight - viewSizePx) / 2
         }
+        DiagLog.log("showPointer: screen=${screenWidth}x$screenHeight  targetScreenPos=($startScreenX, $startScreenY)")
 
         val params = WindowManager.LayoutParams(
             viewSizePx,
@@ -561,32 +609,46 @@ class FloatingPointerService : Service() {
      */
     class PointerOverlayView(context: Context) : View(context) {
 
+        // A thick black "halo" drawn behind everything else, so the crosshair stays
+        // visible against any background - a bright color alone can vanish against a
+        // similarly-colored game UI, but a dark outline never blends in.
+        private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 6f
+            color = Color.parseColor("#E6000000")
+        }
+
         private val outerRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 2.5f
-            color = Color.parseColor("#00E676")
+            strokeWidth = 3f
+            color = Color.parseColor("#FF3D00")
         }
 
         private val innerRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 1.5f
-            color = Color.parseColor("#80FFFFFF")
+            strokeWidth = 2f
+            color = Color.parseColor("#FFFFFFFF")
         }
 
         private val crosshairPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 2f
-            color = Color.parseColor("#00E676")
+            strokeWidth = 3f
+            color = Color.parseColor("#FF3D00")
+        }
+
+        private val centerDotOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#E6000000")
         }
 
         private val centerDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = Color.parseColor("#FF1744")
+            color = Color.parseColor("#FFD600")
         }
 
         private val pulsePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = Color.parseColor("#66FF1744")
+            color = Color.parseColor("#66FF3D00")
         }
 
         private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -629,17 +691,23 @@ class FloatingPointerService : Service() {
                 canvas.drawCircle(cx, cy, pulseRadius, pulsePaint)
             }
 
+            // Dark outline pass first (drawn under everything else, see outlinePaint)
+            canvas.drawCircle(cx, cy, baseRadius, outlinePaint)
+            val chLength = baseRadius * 0.35f
+            canvas.drawLine(cx, cy - baseRadius, cx, cy - baseRadius + chLength, outlinePaint)
+            canvas.drawLine(cx, cy + baseRadius - chLength, cx, cy + baseRadius, outlinePaint)
+            canvas.drawLine(cx - baseRadius, cy, cx - baseRadius + chLength, cy, outlinePaint)
+            canvas.drawLine(cx + baseRadius - chLength, cy, cx + baseRadius, cy, outlinePaint)
+            canvas.drawCircle(cx, cy, 8f, centerDotOutlinePaint)
+
             // Outer target circle
             canvas.drawCircle(cx, cy, baseRadius, outerRingPaint)
             // Inner target circle
             canvas.drawCircle(cx, cy, baseRadius * 0.5f, innerRingPaint)
 
             // Crosshairs
-            val chLength = baseRadius * 0.35f
-            // Vertical crosshair
             canvas.drawLine(cx, cy - baseRadius, cx, cy - baseRadius + chLength, crosshairPaint)
             canvas.drawLine(cx, cy + baseRadius - chLength, cx, cy + baseRadius, crosshairPaint)
-            // Horizontal crosshair
             canvas.drawLine(cx - baseRadius, cy, cx - baseRadius + chLength, cy, crosshairPaint)
             canvas.drawLine(cx + baseRadius - chLength, cy, cx + baseRadius, cy, crosshairPaint)
 
