@@ -16,13 +16,22 @@ import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.example.util.TouchTriggerPrefs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class FloatingPointerService : Service() {
 
@@ -32,6 +41,7 @@ class FloatingPointerService : Service() {
         const val ACTION_HIDE = "com.example.service.ACTION_HIDE_POINTER"
         private const val NOTIFICATION_ID = 102
         private const val CHANNEL_ID = "touch_trigger_pointer_channel"
+        private const val WATCHDOG_INTERVAL_MS = 3000L
 
         private val _isPointerVisible = MutableStateFlow(false)
         val isPointerVisible: StateFlow<Boolean> = _isPointerVisible.asStateFlow()
@@ -42,6 +52,7 @@ class FloatingPointerService : Service() {
         private var hasUserSetPosition = false
         private var savedX = 540f
         private var savedY = 1200f
+        private var loadedPersistedPosition = false
 
         var activePointerView: PointerOverlayView? = null
             private set
@@ -50,11 +61,27 @@ class FloatingPointerService : Service() {
             private set
 
         /**
-         * The overlay window is FLAG_NOT_TOUCHABLE (touches always pass through to the
-         * app underneath), so this is the only way to reposition it - typically driven
-         * by PositionPickerDialog. After the layout pass we read back the window's real
-         * on-screen location instead of trusting our own math, so the reported target
-         * coordinates always match where dispatchGesture will actually land.
+         * Loads the persisted target position into pointerCoordinates before anything
+         * (the ViewModel included) reads or subscribes to it, so a cold process start
+         * doesn't briefly - or permanently, if nothing else updates it first - show the
+         * hardcoded (540, 1200) default instead of where the user actually left it.
+         */
+        fun ensurePositionLoaded(context: Context) {
+            if (loadedPersistedPosition) return
+            loadedPersistedPosition = true
+            val saved = TouchTriggerPrefs.loadPosition(context) ?: return
+            hasUserSetPosition = true
+            savedX = saved.first
+            savedY = saved.second
+            _pointerCoordinates.value = saved
+        }
+
+        /**
+         * The crosshair window is FLAG_NOT_TOUCHABLE (touches always pass through to the
+         * app underneath - see showPointer()), so this is how PositionPickerDialog moves
+         * it. After the layout pass we read back the window's real on-screen location
+         * instead of trusting our own math, so the reported target coordinates always
+         * match where dispatchGesture will actually land.
          */
         fun setPosition(x: Float, y: Float) {
             hasUserSetPosition = true
@@ -72,11 +99,13 @@ class FloatingPointerService : Service() {
             try {
                 service.windowManager?.updateViewLayout(v, lp)
             } catch (_: Exception) {}
+            service.repositionHandle()
             v.post { service.reportActualPosition(v) }
         }
 
         fun show(context: Context) {
             if (!Settings.canDrawOverlays(context)) return
+            ensurePositionLoaded(context)
             val intent = Intent(context, FloatingPointerService::class.java).apply {
                 action = ACTION_SHOW
             }
@@ -104,12 +133,17 @@ class FloatingPointerService : Service() {
     private var windowManager: WindowManager? = null
     private var pointerView: PointerOverlayView? = null
     private var windowLayoutParams: WindowManager.LayoutParams? = null
+    private var handleView: DragHandleView? = null
+    private var handleLayoutParams: WindowManager.LayoutParams? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var watchdogJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
         instance = this
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
+        ensurePositionLoaded(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -190,7 +224,8 @@ class FloatingPointerService : Service() {
             layoutType,
             // Purely visual crosshair overlay: it must NEVER intercept touches, or every
             // tap dispatched under it (and every real user tap) would be swallowed by this
-            // window instead of reaching the app underneath.
+            // window instead of reaching the app underneath. Moving it is done through the
+            // separate small drag handle below instead.
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -210,8 +245,141 @@ class FloatingPointerService : Service() {
             activePointerView = overlayView
             _isPointerVisible.value = true
             overlayView.post { reportActualPosition(overlayView) }
+            addDragHandle(viewSizePx, startScreenX, startScreenY, displayMetrics.density)
+            startWatchdog()
         } catch (e: Exception) {
             Log.e(TAG, "Error adding pointer view", e)
+        }
+    }
+
+    /**
+     * Small touchable handle badge attached to the crosshair's corner - this is what
+     * actually receives drag gestures, since the crosshair itself must stay
+     * FLAG_NOT_TOUCHABLE (see showPointer()).
+     */
+    private fun addDragHandle(mainSizePx: Int, mainScreenX: Int, mainScreenY: Int, density: Float) {
+        val handleSizePx = (26 * density).toInt()
+        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        val params = WindowManager.LayoutParams(
+            handleSizePx,
+            handleSizePx,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = mainScreenX + mainSizePx - handleSizePx / 2
+            y = mainScreenY + mainSizePx - handleSizePx / 2
+        }
+        handleLayoutParams = params
+
+        val handle = DragHandleView(this)
+        handle.setOnTouchListener(object : View.OnTouchListener {
+            private var touchDownRawX = 0f
+            private var touchDownRawY = 0f
+            private var startMainX = 0
+            private var startMainY = 0
+            private var startHandleX = 0
+            private var startHandleY = 0
+
+            override fun onTouch(v: View?, event: MotionEvent?): Boolean {
+                val mainLp = windowLayoutParams ?: return false
+                val handleLp = handleLayoutParams ?: return false
+                val mainView = pointerView ?: return false
+                when (event?.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchDownRawX = event.rawX
+                        touchDownRawY = event.rawY
+                        startMainX = mainLp.x
+                        startMainY = mainLp.y
+                        startHandleX = handleLp.x
+                        startHandleY = handleLp.y
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = (event.rawX - touchDownRawX).toInt()
+                        val dy = (event.rawY - touchDownRawY).toInt()
+                        mainLp.x = startMainX + dx
+                        mainLp.y = startMainY + dy
+                        handleLp.x = startHandleX + dx
+                        handleLp.y = startHandleY + dy
+                        try {
+                            windowManager?.updateViewLayout(mainView, mainLp)
+                            windowManager?.updateViewLayout(v, handleLp)
+                        } catch (_: Exception) {}
+                        return true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        mainView.post { reportActualPosition(mainView) }
+                        return true
+                    }
+                }
+                return false
+            }
+        })
+        handleView = handle
+
+        try {
+            windowManager?.addView(handle, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding drag handle", e)
+        }
+    }
+
+    private fun repositionHandle() {
+        val mainLp = windowLayoutParams ?: return
+        val handle = handleView ?: return
+        val handleLp = handleLayoutParams ?: return
+        val mainSizePx = (44 * resources.displayMetrics.density).toInt()
+        val handleSizePx = handle.width.takeIf { it > 0 } ?: (26 * resources.displayMetrics.density).toInt()
+        handleLp.x = mainLp.x + mainSizePx - handleSizePx / 2
+        handleLp.y = mainLp.y + mainSizePx - handleSizePx / 2
+        try {
+            windowManager?.updateViewLayout(handle, handleLp)
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Some OEM skins silently tear down overlay windows in certain apps (secure/DRM
+     * screens, aggressive per-app "floating window" toggles, etc.) without any callback.
+     * Poll for that and re-add the views if it happens and the permission is still held,
+     * instead of leaving the pointer permanently gone until the user re-opens the app.
+     */
+    private fun startWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = serviceScope.launch {
+            while (isActive) {
+                delay(WATCHDOG_INTERVAL_MS)
+                if (!Settings.canDrawOverlays(this@FloatingPointerService)) continue
+
+                val view = pointerView
+                val lp = windowLayoutParams
+                if (view != null && lp != null && !view.isAttachedToWindow) {
+                    try {
+                        windowManager?.addView(view, lp)
+                        Log.w(TAG, "Re-added pointer overlay after it was removed externally")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to re-add pointer overlay", e)
+                    }
+                }
+
+                val handle = handleView
+                val handleLp = handleLayoutParams
+                if (handle != null && handleLp != null && !handle.isAttachedToWindow) {
+                    try {
+                        windowManager?.addView(handle, handleLp)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to re-add drag handle", e)
+                    }
+                }
+            }
         }
     }
 
@@ -230,10 +398,14 @@ class FloatingPointerService : Service() {
         savedY = centerY
         _pointerCoordinates.value = Pair(centerX, centerY)
         TriggerForegroundService.updateTargetPosition(centerX, centerY)
+        TouchTriggerPrefs.savePosition(this, centerX, centerY)
         view.updateCoordinatesText(centerX.toInt(), centerY.toInt())
     }
 
     private fun removePointer() {
+        watchdogJob?.cancel()
+        watchdogJob = null
+
         val viewToRemove = pointerView
         pointerView = null
         activePointerView = null
@@ -249,6 +421,20 @@ class FloatingPointerService : Service() {
                 Log.e(TAG, "Error removing pointer view safely", e)
             }
         }
+
+        val handleToRemove = handleView
+        handleView = null
+        if (handleToRemove != null) {
+            try {
+                if (handleToRemove.isAttachedToWindow) {
+                    windowManager?.removeViewImmediate(handleToRemove)
+                } else {
+                    windowManager?.removeView(handleToRemove)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing drag handle safely", e)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -258,6 +444,44 @@ class FloatingPointerService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * Small touchable badge used to drag the (non-touchable) crosshair around.
+     */
+    class DragHandleView(context: Context) : View(context) {
+        private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#DD263238")
+        }
+
+        private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            color = Color.WHITE
+        }
+
+        private val glyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2.5f
+            strokeCap = Paint.Cap.ROUND
+            color = Color.WHITE
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val cx = width / 2f
+            val cy = height / 2f
+            val r = (width.coerceAtMost(height) / 2f) - 2f
+
+            canvas.drawCircle(cx, cy, r, backgroundPaint)
+            canvas.drawCircle(cx, cy, r, borderPaint)
+
+            // Simple 4-way cross to signal "drag to move"
+            val len = r * 0.55f
+            canvas.drawLine(cx - len, cy, cx + len, cy, glyphPaint)
+            canvas.drawLine(cx, cy - len, cx, cy + len, glyphPaint)
+        }
+    }
 
     /**
      * Custom drawing view for the floating crosshair target pointer

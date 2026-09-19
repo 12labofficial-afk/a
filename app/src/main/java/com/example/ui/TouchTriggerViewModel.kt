@@ -11,6 +11,7 @@ import com.example.model.TriggerLog
 import com.example.service.TouchAccessibilityService
 import com.example.service.TriggerForegroundService
 import com.example.util.NetworkUtils
+import com.example.util.TouchTriggerPrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,17 +46,31 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     init {
+        // Must happen before anything subscribes to FloatingPointerService.pointerCoordinates
+        // below, otherwise that flow's still-default (540, 1200) value would immediately
+        // overwrite the persisted target we're about to restore.
+        com.example.service.FloatingPointerService.ensurePositionLoaded(application)
+
         // Read screen dimensions
         val displayMetrics = application.resources.displayMetrics
         val w = displayMetrics.widthPixels
         val h = displayMetrics.heightPixels
 
+        // Restore the last-used position/duration/port instead of defaulting back to
+        // screen center every time the process is restarted (the app being killed in
+        // the background and relaunched is common - see the battery optimization card).
+        val persistedPosition = TouchTriggerPrefs.loadPosition(application)
+        val persistedDuration = TouchTriggerPrefs.loadDuration(application, 30L)
+        val persistedPort = TouchTriggerPrefs.loadPort(application, 8080)
+
         _uiState.update {
             it.copy(
                 screenWidthPx = w,
                 screenHeightPx = h,
-                targetX = (w / 2).toFloat(),
-                targetY = (h / 2).toFloat()
+                targetX = persistedPosition?.first ?: (w / 2).toFloat(),
+                targetY = persistedPosition?.second ?: (h / 2).toFloat(),
+                durationMs = persistedDuration,
+                port = persistedPort
             )
         }
 
@@ -161,7 +176,7 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
                 )
             }
             com.example.service.FloatingPointerService.show(context)
-            _uiState.update { it.copy(feedbackMessage = "Floating target pointer active! Drag it anywhere on screen.") }
+            _uiState.update { it.copy(feedbackMessage = "Floating target active! Drag the small dark handle on its corner to move it.") }
         }
     }
 
@@ -236,11 +251,13 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
         }
         TriggerForegroundService.updateCoordinates(boundedX, boundedY, _uiState.value.durationMs)
         com.example.service.FloatingPointerService.setPosition(boundedX, boundedY)
+        TouchTriggerPrefs.savePosition(getApplication(), boundedX, boundedY)
     }
 
     fun setPort(port: Int) {
         if (port in 1024..65535) {
             _uiState.update { it.copy(port = port) }
+            TouchTriggerPrefs.savePort(getApplication(), port)
         }
     }
 
@@ -248,6 +265,7 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
         val duration = durationMs.coerceIn(5L, 1000L)
         _uiState.update { it.copy(durationMs = duration) }
         TriggerForegroundService.updateCoordinates(_uiState.value.targetX, _uiState.value.targetY, duration)
+        TouchTriggerPrefs.saveDuration(getApplication(), duration)
     }
 
     fun testTap(context: Context) {
