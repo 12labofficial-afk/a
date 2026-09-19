@@ -21,6 +21,7 @@ import android.view.View
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.example.util.DiagLog
 import com.example.util.TouchTriggerPrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -144,9 +145,12 @@ class FloatingPointerService : Service() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
         ensurePositionLoaded(this)
+        DiagLog.init(this)
+        DiagLog.log("FloatingPointerService onCreate  pid=${android.os.Process.myPid()}")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        DiagLog.log("onStartCommand  action=${intent?.action}  pid=${android.os.Process.myPid()}")
         when (intent?.action) {
             ACTION_HIDE -> {
                 removePointer()
@@ -156,6 +160,7 @@ class FloatingPointerService : Service() {
             ACTION_SHOW, null -> {
                 if (!Settings.canDrawOverlays(this)) {
                     Log.w(TAG, "Cannot draw overlays: Permission not granted")
+                    DiagLog.log("ACTION_SHOW: overlay permission NOT granted, stopping self")
                     stopSelf()
                 } else {
                     startForeground(NOTIFICATION_ID, buildNotification())
@@ -197,7 +202,11 @@ class FloatingPointerService : Service() {
     }
 
     private fun showPointer() {
-        if (pointerView != null) return
+        if (pointerView != null) {
+            DiagLog.log("showPointer: already have a pointerView, skipping")
+            return
+        }
+        DiagLog.log("showPointer: adding overlay windows")
 
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels
@@ -249,12 +258,22 @@ class FloatingPointerService : Service() {
             windowManager?.addView(overlayView, params)
             activePointerView = overlayView
             _isPointerVisible.value = true
+            DiagLog.log("showPointer: crosshair addView OK at ($startScreenX, $startScreenY)")
             overlayView.post { reportActualPosition(overlayView) }
             addDragHandle(viewSizePx, startScreenX, startScreenY, displayMetrics.density)
-            startWatchdog()
         } catch (e: Exception) {
+            // Leave pointerView set (not null) even though addView failed: the watchdog
+            // started below retries exactly by checking "pointerView is set but not
+            // attached", so nulling it here would make it stop retrying instead of
+            // recovering.
             Log.e(TAG, "Error adding pointer view", e)
+            DiagLog.log("showPointer: crosshair addView FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }
+
+        // Started unconditionally, even if the addView attempt above just failed - it's
+        // the only thing that will ever retry that failure, so it must not depend on the
+        // first attempt having succeeded.
+        startWatchdog()
     }
 
     /**
@@ -335,6 +354,7 @@ class FloatingPointerService : Service() {
             windowManager?.addView(handle, params)
         } catch (e: Exception) {
             Log.e(TAG, "Error adding drag handle", e)
+            DiagLog.log("addDragHandle: addView FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
@@ -359,19 +379,32 @@ class FloatingPointerService : Service() {
      */
     private fun startWatchdog() {
         watchdogJob?.cancel()
+        DiagLog.log("watchdog: started")
+        var tick = 0
         watchdogJob = serviceScope.launch {
             while (isActive) {
                 delay(WATCHDOG_INTERVAL_MS)
-                if (!Settings.canDrawOverlays(this@FloatingPointerService)) continue
+                tick++
+                if (!Settings.canDrawOverlays(this@FloatingPointerService)) {
+                    if (tick % 10 == 0) DiagLog.log("watchdog: overlay permission not granted")
+                    continue
+                }
 
                 val view = pointerView
                 val lp = windowLayoutParams
-                if (view != null && lp != null && !view.isAttachedToWindow) {
+                val attached = view?.isAttachedToWindow == true
+                if (tick % 10 == 0) {
+                    DiagLog.log("watchdog: heartbeat #$tick  pointerView=${if (view == null) "null" else "set"}  attached=$attached")
+                }
+                if (view != null && lp != null && !attached) {
+                    DiagLog.log("watchdog: pointer view detached, attempting re-add")
                     try {
                         windowManager?.addView(view, lp)
                         Log.w(TAG, "Re-added pointer overlay after it was removed externally")
+                        DiagLog.log("watchdog: re-add succeeded")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to re-add pointer overlay", e)
+                        DiagLog.log("watchdog: re-add FAILED: ${e.javaClass.simpleName}: ${e.message}")
                     }
                 }
 
@@ -443,6 +476,7 @@ class FloatingPointerService : Service() {
     }
 
     override fun onDestroy() {
+        DiagLog.log("FloatingPointerService onDestroy  pid=${android.os.Process.myPid()}")
         removePointer()
         instance = null
         super.onDestroy()

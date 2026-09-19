@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.server.TouchTriggerServer
+import com.example.util.DiagLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -90,9 +91,12 @@ class TriggerForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        DiagLog.init(this)
+        DiagLog.log("TriggerForegroundService onCreate  pid=${android.os.Process.myPid()}")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        DiagLog.log("TriggerForegroundService onStartCommand  action=${intent?.action}")
         when (intent?.action) {
             ACTION_STOP -> {
                 stopServerAndSelf()
@@ -237,6 +241,7 @@ class TriggerForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        DiagLog.log("TriggerForegroundService onDestroy  pid=${android.os.Process.myPid()}")
         stopServerAndSelf()
         super.onDestroy()
     }

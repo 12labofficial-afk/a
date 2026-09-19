@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.model.TriggerLog
 import com.example.service.TouchAccessibilityService
 import com.example.service.TriggerForegroundService
+import com.example.util.DiagLog
 import com.example.util.NetworkUtils
 import com.example.util.TouchTriggerPrefs
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +47,8 @@ class TouchTriggerViewModel(application: Application) : AndroidViewModel(applica
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     init {
+        DiagLog.init(application)
+
         // Must happen before anything subscribes to FloatingPointerService.pointerCoordinates
         // below, otherwise that flow's still-default (540, 1200) value would immediately
         // overwrite the persisted target we're about to restore.

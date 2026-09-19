@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -66,6 +67,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.util.DiagLog
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -543,6 +545,10 @@ fun TouchTriggerScreen(
                 }
             }
 
+            // 4. Diagnostics - for debugging cases like the pointer disappearing in a
+            // specific app, since there's no PC/adb access to pull logcat from directly.
+            DiagnosticsCard()
+
             Spacer(modifier = Modifier.height(24.dp))
         }
 
@@ -678,6 +684,103 @@ fun BatteryOptimizationCard(
                 modifier = Modifier.testTag("request_battery_optimization_button")
             ) {
                 Text("Allow", color = Color.White)
+            }
+        }
+    }
+}
+
+/**
+ * Shows the FloatingPointerService lifecycle log (see DiagLog) so bugs like "the pointer
+ * disappeared in this one app" can be diagnosed without a PC/adb - copy the text here and
+ * send it over instead.
+ */
+@Composable
+fun DiagnosticsCard() {
+    val context = LocalContext.current
+    val entries by DiagLog.entries.collectAsState()
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Diagnostics (${entries.size} entries)",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Text(
+                    text = if (expanded) "Hide" else "Show",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            if (expanded) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF1E1E1E)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(10.dp)
+                    ) {
+                        if (entries.isEmpty()) {
+                            Text(
+                                text = "No entries yet. Turn on the floating pointer, reproduce the issue, then check back here.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF9E9E9E)
+                            )
+                        } else {
+                            entries.asReversed().forEach { line ->
+                                Text(
+                                    text = line,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                    color = Color(0xFF00E676),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = ClipData.newPlainText("Diagnostics", entries.asReversed().joinToString("\n"))
+                            clipboard.setPrimaryClip(clip)
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("copy_diagnostics_button")
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Copy Log")
+                    }
+                    OutlinedButton(
+                        onClick = { DiagLog.clear() },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("clear_diagnostics_button")
+                    ) {
+                        Text("Clear")
+                    }
+                }
             }
         }
     }
