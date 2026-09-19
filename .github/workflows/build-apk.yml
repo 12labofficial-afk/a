@@ -5,6 +5,9 @@ on:
     branches: [ claude/apk-build-repo-nsc0ov ]
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -44,3 +47,17 @@ jobs:
           name: touch-trigger-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # The Actions artifact above is served from a blob-storage host that isn't
+      # reachable from where this APK gets picked up next, so also commit it
+      # straight into the repo (git handles binary content natively) as a
+      # simple, always-reachable handoff.
+      - name: Commit built APK to repo
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/*.apk dist/touch-trigger-debug.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dist/touch-trigger-debug.apk
+          git commit -m "Add built debug APK [skip ci]" || echo "Nothing to commit"
+          git push
