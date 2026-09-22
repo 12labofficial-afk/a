@@ -117,7 +117,7 @@ def safe_name(symbol_path):
     return re.sub(r"[^A-Za-z0-9_.-]", "_", symbol_path)
 
 
-def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=360, fps=15):
+def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=1080, fps=15):
     xml_path = os.path.join(extract_dir, "LIBRARY", *symbol_path.split("/")) + ".xml"
     if not os.path.exists(xml_path):
         raise RuntimeError(f"Symbol '{symbol_path}' library me nahi mila.")
@@ -214,7 +214,7 @@ def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=3
         subprocess.run(
             ["ffmpeg", "-y", "-framerate", str(fps),
              "-i", os.path.join(frame_dir, "f_%04d.png"),
-             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", out_path],
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", out_path],
             check=True, capture_output=True,
         )
     finally:
