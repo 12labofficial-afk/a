@@ -4,6 +4,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fonts-noto-core \
     fonts-lohit-deva \
+    librsvg2-bin \
+    zip \
+    unzip \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend

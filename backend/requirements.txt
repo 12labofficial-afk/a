@@ -7,3 +7,4 @@ numpy==1.26.4
 scipy==1.13.1
 pydub==0.25.1
 requests==2.32.3
+xfl2svg @ git+https://github.com/PluieElectrique/xfl2svg.git

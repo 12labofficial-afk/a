@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import shutil
 import uuid
@@ -82,74 +83,64 @@ async def create_job(
     return {"job_id": job_id}
 
 
-@app.post("/api/preview-character")
-async def preview_character(sheet: UploadFile = File(...)):
-    """Upload one character sheet PNG, get back a rendered preview + detected part count."""
-    from app.rig_autoslice import auto_slice_sheet
-    from app.video_renderer import render_character_preview
+@app.post("/api/fla/upload")
+async def fla_upload(fla: UploadFile = File(...)):
+    """Upload a .fla (XFL) file. It's stored on our own server disk (no
+    third-party storage) and scanned for symbols that have REAL, artist-built
+    multi-keyframe motion -- a walk cycle, a blink, a bow-draw -- as opposed
+    to a single static pose."""
+    from app import fla_inspector
 
+    fla_id = uuid.uuid4().hex[:12]
+    fla_dir = os.path.join(config.DATA_DIR, "fla", fla_id)
+    os.makedirs(fla_dir, exist_ok=True)
+
+    raw_path = os.path.join(fla_dir, "original.fla")
+    with open(raw_path, "wb") as f:
+        f.write(await fla.read())
+
+    extract_dir = os.path.join(fla_dir, "extract")
     try:
-        raw = await sheet.read()
-        img = Image.open(io.BytesIO(raw))
-        parts = auto_slice_sheet(img)
-        if len(parts) < 3:
-            raise HTTPException(
-                status_code=422,
-                detail="Sheet me pehchane jaane layak parts nahi mile. Sheet transparent PNG honi chahiye "
-                       "aur usi fixed layout me (body/head/mouths/arms/legs scattered) honi chahiye.",
-            )
-        preview = render_character_preview(parts)
-        buf = io.BytesIO()
-        preview.save(buf, format="PNG")
-        detected = ",".join(sorted(parts.keys()))
-        return Response(
-            content=buf.getvalue(),
-            media_type="image/png",
-            headers={"X-Detected-Parts": detected, "X-Part-Count": str(len(parts))},
-        )
-    except HTTPException:
-        raise
+        fla_inspector.repair_and_extract(raw_path, extract_dir)
+        animations = fla_inspector.list_animated_symbols(extract_dir)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Sheet process nahi ho payi: {e}")
+        shutil.rmtree(fla_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"FLA process nahi ho payi: {e}")
+
+    with open(os.path.join(fla_dir, "animations.json"), "w") as f:
+        json.dump(animations, f)
+
+    return {"fla_id": fla_id, "filename": fla.filename, "animations": animations}
 
 
-@app.get("/api/pose-library")
-def pose_library():
-    """The animation presets the one-click preview buttons are built from."""
-    from app.rig_pose import POSE_LIBRARY
-    return [{"mode": m, "label": label} for m, label in POSE_LIBRARY]
+@app.get("/api/fla/{fla_id}/animations")
+def fla_animations(fla_id: str):
+    anim_json = os.path.join(config.DATA_DIR, "fla", fla_id, "animations.json")
+    if not os.path.exists(anim_json):
+        raise HTTPException(status_code=404, detail="Ye FLA nahi mili -- dubara upload karo.")
+    with open(anim_json) as f:
+        return {"fla_id": fla_id, "animations": json.load(f)}
 
 
-@app.post("/api/preview-animation")
-async def preview_animation(sheet: UploadFile = File(...), mode: str = Form(...)):
-    """Upload one character sheet PNG + a pose name, get back a short one-click preview clip."""
-    from app.rig_autoslice import auto_slice_sheet
-    from app.video_renderer import render_pose_animation
-    from app.rig_pose import POSE_MODES
+@app.get("/api/fla/{fla_id}/preview")
+def fla_preview(fla_id: str, symbol: str):
+    """Render (and cache) a short looping preview clip for one detected animation."""
+    from app import fla_inspector
 
-    if mode not in POSE_MODES:
-        raise HTTPException(status_code=400, detail=f"Unknown mode '{mode}'. Valid: {', '.join(POSE_MODES)}")
+    fla_dir = os.path.join(config.DATA_DIR, "fla", fla_id)
+    extract_dir = os.path.join(fla_dir, "extract")
+    if not os.path.isdir(extract_dir):
+        raise HTTPException(status_code=404, detail="Ye FLA nahi mili -- dubara upload karo.")
 
-    try:
-        raw = await sheet.read()
-        img = Image.open(io.BytesIO(raw))
-        parts = auto_slice_sheet(img)
-        if len(parts) < 3:
-            raise HTTPException(
-                status_code=422,
-                detail="Sheet me pehchane jaane layak parts nahi mile.",
-            )
+    preview_dir = os.path.join(fla_dir, "previews")
+    out_path = os.path.join(preview_dir, fla_inspector.safe_name(symbol) + ".mp4")
+    if not os.path.exists(out_path):
+        try:
+            fla_inspector.render_preview(extract_dir, symbol, out_path)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Ye animation preview nahi ban payi: {e}")
 
-        out_dir = os.path.join(config.DATA_DIR, "anim_previews")
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"{uuid.uuid4().hex[:12]}.mp4")
-        render_pose_animation(parts, mode, out_path)
-
-        return FileResponse(out_path, media_type="video/mp4", filename=f"{mode}.mp4")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Animation nahi ban payi: {e}")
+    return FileResponse(out_path, media_type="video/mp4")
 
 
 @app.get("/api/jobs/{job_id}")

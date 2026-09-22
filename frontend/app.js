@@ -10,15 +10,6 @@ const resultVideo = document.getElementById("resultVideo");
 let characters = []; // { id, name, file }
 let charIdSeq = 0;
 let pollTimer = null;
-let poseLibrary = [];
-
-fetch("/api/pose-library")
-  .then((r) => r.json())
-  .then((list) => {
-    poseLibrary = list;
-    renderCharList();
-  })
-  .catch(() => {});
 
 function addCharacterRow(defaultName) {
   const id = ++charIdSeq;
@@ -36,26 +27,14 @@ function renderCharList() {
   characters.forEach((c) => {
     const card = document.createElement("div");
     card.className = "char-card";
-    const poseButtons = poseLibrary
-      .map((p) => `<button type="button" class="pose-btn" data-mode="${p.mode}" ${c.file ? "" : "disabled"}>${p.label}</button>`)
-      .join("");
 
     card.innerHTML = `
-      <div class="char-preview" id="preview-${c.id}">
-        <div class="placeholder">Sheet PNG upload karo</div>
-      </div>
       <div class="fields">
         <label>Character ka naam (JSON me jaisa likha hai)</label>
         <input type="text" placeholder="e.g. मोहन" value="${c.name || ""}" data-role="name" />
         <label style="margin-top:8px">Character Sheet PNG</label>
         <input type="file" accept=".png" data-role="file" />
-        <div class="char-status" id="status-${c.id}"></div>
         <button type="button" class="danger" style="margin-top:8px" data-role="remove">Remove</button>
-      </div>
-      <div class="anim-section">
-        <label>Ek-click Animation Preview</label>
-        <div class="pose-grid">${poseButtons}</div>
-        <div class="anim-result" id="anim-result-${c.id}"></div>
       </div>
     `;
     card.querySelector('[data-role="name"]').addEventListener("input", (e) => {
@@ -65,71 +44,10 @@ function renderCharList() {
       const file = e.target.files[0];
       if (!file) return;
       c.file = file;
-      previewCharacter(c);
-      card.querySelectorAll(".pose-btn").forEach((btn) => (btn.disabled = false));
     });
     card.querySelector('[data-role="remove"]').addEventListener("click", () => removeCharacter(c.id));
-    card.querySelectorAll(".pose-btn").forEach((btn) => {
-      btn.addEventListener("click", () => generateAnimationPreview(c, btn.dataset.mode, btn));
-    });
     charList.appendChild(card);
   });
-}
-
-async function generateAnimationPreview(c, mode, btnEl) {
-  const resultEl = document.getElementById(`anim-result-${c.id}`);
-  if (!c.file) return;
-
-  btnEl.disabled = true;
-  const originalLabel = btnEl.textContent;
-  btnEl.textContent = "Ban raha hai...";
-  resultEl.innerHTML = `<div class="anim-loading">"${originalLabel}" animation generate ho rahi hai...</div>`;
-
-  const form = new FormData();
-  form.append("sheet", c.file);
-  form.append("mode", mode);
-  try {
-    const resp = await fetch("/api/preview-animation", { method: "POST", body: form });
-    if (!resp.ok) {
-      const detail = await resp.json().catch(() => ({}));
-      throw new Error(detail.detail || `Error ${resp.status}`);
-    }
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    resultEl.innerHTML = `<video src="${url}" controls autoplay loop muted></video>`;
-  } catch (e) {
-    resultEl.innerHTML = `<div class="anim-loading" style="color:#f87171">Fail: ${e.message}</div>`;
-  } finally {
-    btnEl.disabled = false;
-    btnEl.textContent = originalLabel;
-  }
-}
-
-async function previewCharacter(c) {
-  const statusEl = document.getElementById(`status-${c.id}`);
-  const previewEl = document.getElementById(`preview-${c.id}`);
-  statusEl.textContent = "Preview ban raha hai...";
-  statusEl.className = "char-status loading";
-
-  const form = new FormData();
-  form.append("sheet", c.file);
-  try {
-    const resp = await fetch("/api/preview-character", { method: "POST", body: form });
-    if (!resp.ok) {
-      const detail = await resp.json().catch(() => ({}));
-      throw new Error(detail.detail || `Error ${resp.status}`);
-    }
-    const partCount = resp.headers.get("X-Part-Count") || "?";
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    previewEl.innerHTML = `<img src="${url}" />`;
-    statusEl.textContent = `${partCount} parts pehchane gaye — rig theek lag raha hai to aage badho.`;
-    statusEl.className = "char-status ok";
-  } catch (e) {
-    previewEl.innerHTML = `<div class="placeholder">Preview fail</div>`;
-    statusEl.textContent = e.message;
-    statusEl.className = "char-status bad";
-  }
 }
 
 addCharBtn.addEventListener("click", () => addCharacterRow());

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <title>FLA Animation Browser</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(135deg, #0f172a, #1e1b4b);
+      color: #f1f5f9; min-height: 100vh; padding: 24px 16px 60px;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; }
+    h1 { font-size: 1.7rem; margin-bottom: 4px; }
+    p.sub { color: #94a3b8; margin-top: 0; margin-bottom: 24px; }
+    p.sub a { color: #fb923c; }
+    .card {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px; padding: 20px; margin-bottom: 18px;
+    }
+    label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.92rem; }
+    small { display: block; color: #94a3b8; margin-bottom: 10px; font-size: 0.8rem; }
+    input[type=file] {
+      width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155;
+      background: #0f172a; color: #f1f5f9;
+    }
+    button {
+      padding: 12px 18px; font-size: 0.95rem; font-weight: 700;
+      background: linear-gradient(135deg, #f97316, #ea580c); color: white;
+      border: none; border-radius: 10px; cursor: pointer; margin-top: 12px;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #uploadStatus { margin-top: 10px; font-size: 0.88rem; color: #cbd5e1; }
+    .err { color: #f87171; margin-top: 10px; white-space: pre-wrap; }
+
+    .grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 14px; margin-top: 8px;
+    }
+    .anim-card {
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+    }
+    .anim-name { font-weight: 700; font-size: 0.92rem; word-break: break-word; }
+    .anim-meta { color: #94a3b8; font-size: 0.75rem; }
+    .anim-stage {
+      width: 100%; aspect-ratio: 1/1; background: #18181b; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    .anim-stage video { width: 100%; height: 100%; object-fit: contain; }
+    .play-btn {
+      background: #1e293b; border: 1px solid #334155; color: #cbd5e1;
+      padding: 8px 12px; border-radius: 8px; font-size: 0.82rem; font-weight: 600;
+      cursor: pointer; margin-top: 0;
+    }
+    .play-btn:hover:not(:disabled) { background: #334155; border-color: #f97316; }
+    .anim-error { color: #f87171; font-size: 0.75rem; }
+    #summary { color: #94a3b8; font-size: 0.85rem; margin-bottom: 8px; }
+    .spinner {
+      width: 22px; height: 22px; border-radius: 50%;
+      border: 3px solid #334155; border-top-color: #f97316;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🗂️ FLA Animation Browser</h1>
+    <p class="sub">Apni Adobe Animate <code>.fla</code> file upload karo — sirf humare server pe save hogi (koi third-party storage nahi). Jo bhi symbols me REAL, artist-made multi-keyframe motion hai (walk, blink, bow-draw, jaisa bhi ho), sab yahan list ho jaayenge, aur har ek ko play karke dekh sakte ho. <a href="index.html">← Animation Studio</a></p>
+
+    <div class="card">
+      <label>.fla file</label>
+      <small>Uncorrupted ho ya corrupted, dono chalega — automatically repair kar lenge agar zip damaged nikli.</small>
+      <input type="file" id="flaFile" accept=".fla" />
+      <button id="uploadBtn">Upload aur Scan Karo</button>
+      <div id="uploadStatus"></div>
+      <div id="uploadErr" class="err"></div>
+    </div>
+
+    <div class="card" id="resultsCard" style="display:none">
+      <div id="summary"></div>
+      <div class="grid" id="animGrid"></div>
+    </div>
+  </div>
+  <script src="fla.js"></script>
+</body>
+</html>

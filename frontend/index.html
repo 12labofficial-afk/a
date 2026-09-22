@@ -50,34 +50,7 @@
       padding: 14px; margin-bottom: 12px; align-items: flex-start; flex-wrap: wrap;
     }
     .char-card .fields { flex: 1; min-width: 220px; }
-    .char-preview {
-      width: 140px; height: 190px; border-radius: 8px; background: #0b0f1a;
-      display: flex; align-items: center; justify-content: center; overflow: hidden;
-      border: 1px dashed #334155; flex-shrink: 0;
-    }
-    .char-preview img { max-width: 100%; max-height: 100%; }
-    .char-preview .placeholder { color: #475569; font-size: 0.75rem; text-align: center; padding: 8px; }
-    .char-status { font-size: 0.78rem; margin-top: 6px; }
-    .char-status.ok { color: #4ade80; }
-    .char-status.bad { color: #f87171; }
-    .char-status.loading { color: #fbbf24; }
     .char-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-
-    .anim-section {
-      flex-basis: 100%; margin-top: 14px; padding-top: 14px;
-      border-top: 1px dashed rgba(255,255,255,0.1);
-    }
-    .pose-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-    .pose-btn {
-      background: #1e293b; border: 1px solid #334155; color: #cbd5e1;
-      padding: 7px 12px; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
-      cursor: pointer;
-    }
-    .pose-btn:hover:not(:disabled) { background: #334155; border-color: #f97316; }
-    .pose-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .anim-result { margin-top: 12px; }
-    .anim-result video { max-width: 260px; border-radius: 10px; display: block; }
-    .anim-loading { color: #94a3b8; font-size: 0.82rem; }
 
     #status { margin-top: 16px; }
     .bar-bg { background: #1e293b; border-radius: 8px; overflow: hidden; height: 22px; }
@@ -94,14 +67,14 @@
 <body>
   <div class="wrap">
     <h1>🎬 AI Script → 2D Animation Studio</h1>
-    <p class="sub">Character sheet PNG daalo, turant preview dekho ki rig sahi lag rahi hai — phir script JSON aur audio ke saath poora animation video generate karo.</p>
+    <p class="sub">Character sheet PNG daalo, phir script JSON aur audio ke saath poora animation video generate karo. <a href="fla.html" style="color:#fb923c">FLA Animation Browser →</a></p>
 
     <div class="card">
       <div class="char-header">
         <h2><span class="step-badge">1</span>Characters</h2>
         <button type="button" class="secondary" id="addCharBtn">+ Character Add Karo</button>
       </div>
-      <small>Har character ke liye ek transparent PNG sheet daalo (body/head/mouth/arms/legs scattered layout). Upload karte hi preview turant ban jaayega.</small>
+      <small>Har character ke liye ek transparent PNG sheet daalo (body/head/mouth/arms/legs scattered layout).</small>
       <div id="charList"></div>
     </div>
 
