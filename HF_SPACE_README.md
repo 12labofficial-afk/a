@@ -7,7 +7,7 @@ pehchanta hai ki Space Docker SDK use karega aur app kaunse port pe sunta hai.
 ---
 title: AI Script to Animation Studio
 emoji: 🎬
-colorFrom: orange
+colorFrom: yellow
 colorTo: purple
 sdk: docker
 app_port: 8000
