@@ -49,7 +49,15 @@ function renderAnimations(animations) {
     return;
   }
 
-  summaryEl.textContent = `${animations.length} animated symbol mile (sabse zyada motion wale pehle):`;
+  const nChar = animations.filter((a) => a.role === "character").length;
+  const nAnim = animations.filter((a) => a.role === "animation").length;
+  summaryEl.textContent = `${nChar} character/pose assembly, ${nAnim} real animation, ${animations.length - nChar - nAnim} chhote parts mile:`;
+
+  const ROLE_BADGE = {
+    character: "🧍 Character/Pose",
+    animation: "🎬 Animation",
+    part: "🔧 Part",
+  };
 
   animations.forEach((a) => {
     const card = document.createElement("div");
@@ -58,6 +66,7 @@ function renderAnimations(animations) {
       <div class="anim-stage" id="stage-${cssSafe(a.symbol)}">
         <button class="play-btn" data-symbol="${escapeAttr(a.symbol)}">▶ Play</button>
       </div>
+      <div class="anim-role role-${a.role}">${ROLE_BADGE[a.role] || a.role}</div>
       <div class="anim-name">${escapeHtml(a.display_name)}</div>
       <div class="anim-meta">${escapeHtml(a.symbol)}</div>
       <div class="anim-meta">${a.keyframes} keyframes · ${a.duration} frames · ${a.layers} layers</div>

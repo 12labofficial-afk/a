@@ -71,6 +71,7 @@ def _analyze_symbol_file(full_path):
     max_keyframes = 0
     total_duration = 0
     layer_count = 0
+    nested_refs = set()
     for layer in root.iter():
         if _local(layer.tag) != "DOMLayer":
             continue
@@ -84,20 +85,68 @@ def _analyze_symbol_file(full_path):
             except ValueError:
                 continue
             total_duration = max(total_duration, idx + dur)
+        for inst in layer.iter():
+            if _local(inst.tag) == "DOMSymbolInstance":
+                lib = inst.get("libraryItemName")
+                if lib:
+                    nested_refs.add(lib)
 
     return dict(
         keyframes=max_keyframes,
         duration=max(total_duration, 1),
         layers=layer_count,
         symbol_type=root.get("symbolType", "graphic"),
+        nested_parts=len(nested_refs),
     )
 
 
-def list_animated_symbols(extract_dir, min_keyframes=2):
-    """Scan the whole LIBRARY for symbols with real (multi-keyframe) motion
-    on at least one layer. Sorted most-animated first."""
+def find_stage_symbols(extract_dir):
+    """The symbol(s) placed directly on the Stage/Scene -- this is what you'd
+    actually SEE if you opened the .fla in Adobe Animate. It's often a mostly
+    static full-body pose (few keyframes of its own, since the real motion
+    lives in separate library duplicates), so the keyframe-based scan below
+    can miss it entirely even though it's the single most important thing
+    to show: the assembled character itself."""
+    doc_path = os.path.join(extract_dir, "DOMDocument.xml")
+    if not os.path.exists(doc_path):
+        return []
+    try:
+        tree = ET.parse(doc_path)
+    except ET.ParseError:
+        return []
+    root = tree.getroot()
+    refs = []
+    seen = set()
+    for inst in root.iter():
+        if _local(inst.tag) != "DOMSymbolInstance":
+            continue
+        lib = inst.get("libraryItemName")
+        if lib and lib not in seen:
+            seen.add(lib)
+            refs.append(lib)
+    return refs
+
+
+def list_animated_symbols(extract_dir, min_keyframes=2, composite_threshold=6):
+    """Scan the whole LIBRARY for symbols worth surfacing to a user browsing
+    this .fla: the assembled character(s) actually placed on the Stage
+    (always included, however static -- it's the one thing you'd recognize
+    on opening the file in Animate), plus every symbol with real (multi-
+    keyframe) motion on at least one layer.
+
+    Each result gets a `role`:
+      - "character": on the Stage, or itself assembles several other symbols
+        (nested_parts >= composite_threshold) -- a full body/head, not a part.
+      - "animation": real multi-keyframe motion, but not a full assembly --
+        a walk cycle, a blink, a gesture.
+      - "part": everything else that still had >=min_keyframes (small
+        fragments -- an eyebrow twitch, one finger). Kept, but ranked last,
+        since these are rarely what someone browsing the file actually wants.
+    """
     library_dir = os.path.join(extract_dir, "LIBRARY")
-    results = []
+    stage_symbols = set(find_stage_symbols(extract_dir))
+
+    all_info = {}
     for root_dir, _, files in os.walk(library_dir):
         for fn in files:
             if not fn.endswith(".xml"):
@@ -106,10 +155,47 @@ def list_animated_symbols(extract_dir, min_keyframes=2):
             rel = os.path.relpath(full, library_dir)
             symbol_path = rel[:-4].replace(os.sep, "/")
             info = _analyze_symbol_file(full)
-            if info is None or info["keyframes"] < min_keyframes:
+            if info is None:
                 continue
-            results.append(dict(symbol=symbol_path, display_name=os.path.basename(symbol_path), **info))
-    results.sort(key=lambda r: -r["keyframes"])
+            all_info[symbol_path] = info
+
+    def resolve(symbol_path):
+        """Stage instances are recorded under their bare name (e.g. "Symbol 4"),
+        but the file may only exist under "Duplicate Items Folder/Symbol 4" --
+        match either way."""
+        if symbol_path in all_info:
+            return symbol_path
+        for cand in all_info:
+            if cand.endswith("/" + symbol_path):
+                return cand
+        return None
+
+    results = []
+    seen = set()
+    for stage_sym in stage_symbols:
+        resolved = resolve(stage_sym)
+        if resolved is None or resolved in seen:
+            continue
+        seen.add(resolved)
+        info = all_info[resolved]
+        results.append(dict(symbol=resolved, display_name=os.path.basename(resolved),
+                             role="character", **info))
+
+    for symbol_path, info in all_info.items():
+        if symbol_path in seen:
+            continue
+        is_composite = info["nested_parts"] >= composite_threshold
+        if is_composite:
+            role = "character"
+        elif info["keyframes"] >= min_keyframes:
+            role = "animation"
+        else:
+            continue
+        results.append(dict(symbol=symbol_path, display_name=os.path.basename(symbol_path),
+                             role=role, **info))
+
+    role_rank = {"character": 0, "animation": 1, "part": 2}
+    results.sort(key=lambda r: (role_rank.get(r["role"], 3), -r["keyframes"]))
     return results
 
 
