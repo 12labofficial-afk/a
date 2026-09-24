@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from PIL import Image
@@ -203,7 +204,25 @@ def safe_name(symbol_path):
     return re.sub(r"[^A-Za-z0-9_.-]", "_", symbol_path)
 
 
-def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=1080, fps=15):
+def doc_frame_rate(extract_dir, default=24):
+    """The frame rate the artist authored the file at -- playing the frames
+    back at any other rate makes the motion look sped-up or choppy."""
+    doc_path = os.path.join(extract_dir, "DOMDocument.xml")
+    try:
+        root = ET.parse(doc_path).getroot()
+        return float(root.get("frameRate", default))
+    except (OSError, ET.ParseError, ValueError):
+        return float(default)
+
+
+def _rsvg(args):
+    subprocess.run(["rsvg-convert", *args], check=True)
+
+
+def render_preview(extract_dir, symbol_path, out_path, max_frames=300, out_size=1080, fps=None,
+                   min_seconds=0.0):
+    """Render a symbol's own timeline to an mp4 at the file's authored frame
+    rate. If the timeline is shorter than `min_seconds`, it loops."""
     xml_path = os.path.join(extract_dir, "LIBRARY", *symbol_path.split("/")) + ".xml"
     if not os.path.exists(xml_path):
         raise RuntimeError(f"Symbol '{symbol_path}' library me nahi mila.")
@@ -211,6 +230,8 @@ def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=1
     if info is None:
         raise RuntimeError(f"'{symbol_path}' ek valid symbol nahi hai.")
 
+    if fps is None:
+        fps = doc_frame_rate(extract_dir)
     total = max(1, min(info["duration"], max_frames))
     work = tempfile.mkdtemp(prefix="flaprev_")
     try:
@@ -236,7 +257,7 @@ def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=1
         # speck in the middle of a mostly-empty frame.
         coarse_size = 420
         wide_off, wide_span = -1500.0, 6000.0
-        union = None
+        coarse_jobs = []
         for svg_path in svgs:
             data = open(svg_path, encoding="utf-8").read()
             data = re.sub(r'viewBox="[^"]*"', f'viewBox="{wide_off} {wide_off} {wide_span} {wide_span}"', data)
@@ -245,10 +266,12 @@ def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=1
             fixed_svg = svg_path + ".coarse.svg"
             open(fixed_svg, "w", encoding="utf-8").write(data)
             png_path = svg_path + ".coarse.png"
-            subprocess.run(
-                ["rsvg-convert", "-w", str(coarse_size), "-h", str(coarse_size), fixed_svg, "-o", png_path],
-                check=True,
-            )
+            coarse_jobs.append((["-w", str(coarse_size), "-h", str(coarse_size), fixed_svg, "-o", png_path], png_path))
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            list(pool.map(_rsvg, [j[0] for j in coarse_jobs]))
+
+        union = None
+        for _, png_path in coarse_jobs:
             arr = np.array(Image.open(png_path).convert("RGBA"))
             mask = arr[:, :, 3] > 10
             ys, xs = np.where(mask)
@@ -277,7 +300,8 @@ def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=1
         raster2 = max(out_size, 480)
         frame_dir = os.path.join(work, "frames_out")
         os.makedirs(frame_dir, exist_ok=True)
-        for i, svg_path in enumerate(svgs, start=1):
+        fine_jobs = []
+        for svg_path in svgs:
             data = open(svg_path, encoding="utf-8").read()
             data = re.sub(r'viewBox="[^"]*"', f'viewBox="{cx0} {cy0} {side} {side}"', data)
             data = re.sub(r'width="[^"]*px"', f'width="{raster2}px"', data)
@@ -285,16 +309,23 @@ def render_preview(extract_dir, symbol_path, out_path, max_frames=48, out_size=1
             fixed_svg = svg_path + ".fine.svg"
             open(fixed_svg, "w", encoding="utf-8").write(data)
             raw_png = svg_path + ".fine.png"
-            subprocess.run(
-                ["rsvg-convert", "-w", str(raster2), "-h", str(raster2), fixed_svg, "-o", raw_png],
-                check=True,
-            )
+            fine_jobs.append((["-w", str(raster2), "-h", str(raster2), fixed_svg, "-o", raw_png], raw_png))
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            list(pool.map(_rsvg, [j[0] for j in fine_jobs]))
+
+        n_unique = len(fine_jobs)
+        for i, (_, raw_png) in enumerate(fine_jobs, start=1):
             im = Image.open(raw_png).convert("RGBA")
             if raster2 != out_size:
                 im = im.resize((out_size, out_size))
             canvas = Image.new("RGBA", (out_size, out_size), (24, 24, 24, 255))
             canvas.alpha_composite(im, (0, 0))
             canvas.convert("RGB").save(os.path.join(frame_dir, f"f_{i:04d}.png"))
+
+        n_out = max(n_unique, int(round(min_seconds * fps)))
+        for i in range(n_unique + 1, n_out + 1):
+            src = os.path.join(frame_dir, f"f_{(i - 1) % n_unique + 1:04d}.png")
+            os.link(src, os.path.join(frame_dir, f"f_{i:04d}.png"))
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         subprocess.run(

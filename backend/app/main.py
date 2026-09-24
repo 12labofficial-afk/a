@@ -123,8 +123,9 @@ def fla_animations(fla_id: str):
 
 
 @app.get("/api/fla/{fla_id}/preview")
-def fla_preview(fla_id: str, symbol: str):
-    """Render (and cache) a short looping preview clip for one detected animation."""
+def fla_preview(fla_id: str, symbol: str, seconds: float = 0.0):
+    """Render (and cache) a clip for one detected animation at the file's own
+    frame rate. `seconds` loops it up to at least that long."""
     from app import fla_inspector
 
     fla_dir = os.path.join(config.DATA_DIR, "fla", fla_id)
@@ -132,11 +133,13 @@ def fla_preview(fla_id: str, symbol: str):
     if not os.path.isdir(extract_dir):
         raise HTTPException(status_code=404, detail="Ye FLA nahi mili -- dubara upload karo.")
 
+    seconds = max(0.0, min(seconds, 60.0))
     preview_dir = os.path.join(fla_dir, "previews")
-    out_path = os.path.join(preview_dir, fla_inspector.safe_name(symbol) + ".mp4")
+    suffix = f"_{seconds:g}s" if seconds else ""
+    out_path = os.path.join(preview_dir, fla_inspector.safe_name(symbol) + suffix + ".mp4")
     if not os.path.exists(out_path):
         try:
-            fla_inspector.render_preview(extract_dir, symbol, out_path)
+            fla_inspector.render_preview(extract_dir, symbol, out_path, min_seconds=seconds)
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Ye animation preview nahi ban payi: {e}")
 
