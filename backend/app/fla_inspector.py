@@ -16,9 +16,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-
-import numpy as np
 
 import numpy as np
 from PIL import Image
@@ -533,6 +532,124 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
     os.remove(video_only)
     return dict(mouth_symbol=mouth_info["mouth_symbol"], mouth_layer=mouth_info["mouth_layer_name"],
                 target_layer=mouth_info["target_layer"], frames=n_frames, duration=duration)
+
+
+def attach_prop(extract_dir, target_symbol, prop_extract_dir, prop_symbol,
+                 parent_layer, offset, out_symbol_name):
+    """Add `prop_symbol` (a static prop from a possibly different FLA's
+    extract dir, e.g. a weapon/tool drawn on its own) as a new layer inside
+    `target_symbol`, RIGIDLY attached to `parent_layer` -- every frame, the
+    prop gets the parent layer's own real matrix for that exact frame
+    (rotation and all), composed with a fixed local `offset` (dx, dy). This
+    makes the prop move exactly as much as the character's real, already-
+    authored motion moves it, and not a pixel more -- nothing about the
+    character's own motion is invented or recomputed, and the prop's
+    placement is a fixed choice, not a fabricated animation.
+
+    `target_symbol` may itself be a previously generated composite (e.g. the
+    output of `render_lipsync`) already sitting in `extract_dir`.
+    """
+    prop_src_path = _symbol_xml_path(prop_extract_dir, prop_symbol)
+    prop_xml = open(prop_src_path, encoding="utf-8").read()
+    prop_name = f"Prop_{re.sub(r'[^A-Za-z0-9_]', '_', os.path.basename(prop_symbol))}_{uuid.uuid4().hex[:6]}"
+    old_name_m = re.search(r'\bname="([^"]+)"', prop_xml)
+    old_item_id_m = re.search(r'\bitemID="([^"]+)"', prop_xml)
+    if old_name_m:
+        prop_xml = prop_xml.replace(f'name="{old_name_m.group(1)}"', f'name="{prop_name}"', 1)
+    new_item_id = f"00aa00{uuid.uuid4().hex[:10]}"
+    if old_item_id_m:
+        prop_xml = prop_xml.replace(f'itemID="{old_item_id_m.group(1)}"', f'itemID="{new_item_id}"', 1)
+
+    lib_dir = os.path.join(extract_dir, "LIBRARY")
+    prop_dst_path = os.path.join(lib_dir, f"{prop_name}.xml")
+    open(prop_dst_path, "w", encoding="utf-8").write(prop_xml)
+
+    doc_path = os.path.join(extract_dir, "DOMDocument.xml")
+    doc = open(doc_path, encoding="utf-8").read()
+    include = f'          <Include href="{prop_name}.xml" itemIcon="1" loadImmediate="false" itemID="{new_item_id}" lastModified="1"/>\n'
+    if f'{prop_name}.xml"' not in doc:
+        doc = doc.replace("     <symbols>\n", "     <symbols>\n" + include)
+        open(doc_path, "w", encoding="utf-8").write(doc)
+
+    xml_path = _symbol_xml_path(extract_dir, target_symbol)
+    root = ET.parse(xml_path).getroot()
+    dx, dy = offset
+    prop_frames_xml = []
+    for layer in root.iter():
+        if _local(layer.tag) != "DOMLayer":
+            continue
+        if layer.get("name") != parent_layer:
+            continue
+        frames = [f for f in layer.iter() if _local(f.tag) == "DOMFrame"]
+        for f in frames:
+            idx = int(f.get("index"))
+            dur = int(f.get("duration", 1))
+            inst = _first_instance(f)
+            if inst is None:
+                continue
+            a, b, c, d, tx, ty = _matrix_attrs(inst)
+            comp_tx = a * dx + c * dy + tx
+            comp_ty = b * dx + d * dy + ty
+            is_tween = f.get("tweenType") == "motion"
+            tween_attrs = ' tweenType="motion" motionTweenSnap="true"' if is_tween else ""
+            mparts = []
+            if abs(a - 1) > 1e-9 or b or c or abs(d - 1) > 1e-9:
+                mparts += [f'a="{a}"']
+                if b: mparts.append(f'b="{b}"')
+                if c: mparts.append(f'c="{c}"')
+                mparts += [f'd="{d}"']
+            mparts += [f'tx="{comp_tx}"', f'ty="{comp_ty}"']
+            prop_frames_xml.append(f'''<DOMFrame index="{idx}" duration="{dur}" keyMode="9728"{tween_attrs}>
+              <elements>
+                <DOMSymbolInstance libraryItemName="{prop_name}" symbolType="graphic" loop="loop">
+                  <matrix><Matrix {" ".join(mparts)}/></matrix>
+                </DOMSymbolInstance>
+              </elements>
+            </DOMFrame>''')
+        break
+
+    if not prop_frames_xml:
+        raise RuntimeError(f"'{target_symbol}' me '{parent_layer}' naam ki layer nahi mili.")
+
+    layers_xml = []
+    inserted = False
+    for layer in root.iter():
+        if _local(layer.tag) != "DOMLayer":
+            continue
+        name = layer.get("name")
+        frames = [f for f in layer.iter() if _local(f.tag) == "DOMFrame"]
+        out_frames = [ET.tostring(f, encoding="unicode") for f in frames]
+        if name == "Face" and not inserted:
+            layers_xml.append(f'        <DOMLayer name="Favda">\n          <frames>\n' +
+                               "\n".join(prop_frames_xml) + "\n          </frames>\n        </DOMLayer>")
+            inserted = True
+        layers_xml.append(f'        <DOMLayer name="{name}">\n          <frames>\n' +
+                           "\n".join(out_frames) + "\n          </frames>\n        </DOMLayer>")
+    if not inserted:
+        layers_xml.insert(0, f'        <DOMLayer name="Favda">\n          <frames>\n' +
+                           "\n".join(prop_frames_xml) + "\n          </frames>\n        </DOMLayer>")
+
+    xml = f'''<DOMSymbolItem xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://ns.adobe.com/xfl/2008/" name="{out_symbol_name}" itemID="00bb00{uuid.uuid4().hex[:10]}" symbolType="graphic" lastModified="1" lastUniqueIdentifier="1">
+  <timeline>
+    <DOMTimeline name="{out_symbol_name}" layerDepthEnabled="true">
+      <layers>
+{os.linesep.join(layers_xml)}
+      </layers>
+    </DOMTimeline>
+  </timeline>
+</DOMSymbolItem>
+'''
+    out_xml_path = os.path.join(lib_dir, f"{out_symbol_name}.xml")
+    open(out_xml_path, "w", encoding="utf-8").write(xml)
+
+    doc = open(doc_path, encoding="utf-8").read()
+    out_item_id = f"00cc00{uuid.uuid4().hex[:10]}"
+    include = f'          <Include href="{out_symbol_name}.xml" itemIcon="1" loadImmediate="false" itemID="{out_item_id}" lastModified="1"/>\n'
+    if f'{out_symbol_name}.xml"' not in doc:
+        doc = doc.replace("     <symbols>\n", "     <symbols>\n" + include)
+        open(doc_path, "w", encoding="utf-8").write(doc)
+
+    return out_symbol_name
 
 
 def doc_frame_rate(extract_dir, default=24):

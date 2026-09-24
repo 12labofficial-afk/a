@@ -176,6 +176,56 @@ async def fla_lipsync(fla_id: str, symbol: str = Form(...), audio: UploadFile = 
                          headers={"X-Mouth-Symbol": info["mouth_symbol"], "X-Target-Layer": info["target_layer"]})
 
 
+@app.post("/api/fla/{fla_id}/attach-prop")
+async def fla_attach_prop(
+    fla_id: str,
+    symbol: str = Form(...),
+    prop_fla_id: str = Form(...),
+    prop_symbol: str = Form(...),
+    parent_layer: str = Form(...),
+    offset_x: float = Form(0.0),
+    offset_y: float = Form(0.0),
+    seconds: float = Form(0.0),
+):
+    """Rigidly attach a static prop (from a possibly different uploaded FLA --
+    e.g. a weapon/tool drawn on its own) to one real layer of `symbol`. The
+    prop follows that layer's own real, already-authored matrix every frame
+    plus a fixed local offset -- no new motion is invented, the prop just
+    rides along with whatever real motion that layer already has."""
+    from app import fla_inspector
+
+    fla_dir = os.path.join(config.DATA_DIR, "fla", fla_id)
+    extract_dir = os.path.join(fla_dir, "extract")
+    if not os.path.isdir(extract_dir):
+        raise HTTPException(status_code=404, detail="Ye FLA nahi mili -- dubara upload karo.")
+
+    prop_extract_dir = os.path.join(config.DATA_DIR, "fla", prop_fla_id, "extract")
+    if not os.path.isdir(prop_extract_dir):
+        raise HTTPException(status_code=404, detail="Prop wali FLA nahi mili -- dubara upload karo.")
+
+    out_symbol = f"{fla_inspector.safe_name(symbol)}_{fla_inspector.safe_name(prop_symbol)}_{uuid.uuid4().hex[:6]}"
+    try:
+        out_symbol = fla_inspector.attach_prop(
+            extract_dir, symbol, prop_extract_dir, prop_symbol,
+            parent_layer, (offset_x, offset_y), out_symbol,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Prop attach nahi ho paya: {e}")
+
+    out_dir = os.path.join(fla_dir, "previews")
+    os.makedirs(out_dir, exist_ok=True)
+    seconds = max(0.0, min(seconds, 60.0))
+    suffix = f"_{seconds:g}s" if seconds else ""
+    out_path = os.path.join(out_dir, out_symbol + suffix + ".mp4")
+    if not os.path.exists(out_path):
+        try:
+            fla_inspector.render_preview(extract_dir, out_symbol, out_path, min_seconds=seconds)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Preview nahi ban payi: {e}")
+
+    return FileResponse(out_path, media_type="video/mp4", headers={"X-Composite-Symbol": out_symbol})
+
+
 @app.get("/api/jobs/{job_id}")
 def job_status(job_id: str):
     job = jobs.get_job(job_id)
