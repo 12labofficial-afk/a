@@ -11,6 +11,7 @@ sitting still. We find those by parsing every LIBRARY/**/*.xml and counting
 DOMFrame elements per layer.
 """
 import glob
+import math
 import os
 import re
 import shutil
@@ -535,16 +536,19 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
 
 
 def attach_prop(extract_dir, target_symbol, prop_extract_dir, prop_symbol,
-                 parent_layer, offset, out_symbol_name):
+                 parent_layer, offset, out_symbol_name, rotation_deg=0.0):
     """Add `prop_symbol` (a static prop from a possibly different FLA's
     extract dir, e.g. a weapon/tool drawn on its own) as a new layer inside
     `target_symbol`, RIGIDLY attached to `parent_layer` -- every frame, the
     prop gets the parent layer's own real matrix for that exact frame
-    (rotation and all), composed with a fixed local `offset` (dx, dy). This
+    (rotation and all), composed with a fixed local `offset` (dx, dy) and a
+    fixed `rotation_deg` (how the prop is held relative to that layer, e.g.
+    an axe gripped in a hand sitting at an angle across the shoulder). This
     makes the prop move exactly as much as the character's real, already-
     authored motion moves it, and not a pixel more -- nothing about the
-    character's own motion is invented or recomputed, and the prop's
-    placement is a fixed choice, not a fabricated animation.
+    character's own motion is invented or recomputed; the hold angle/offset
+    is a fixed placement choice (found by rendering and looking), not a
+    fabricated animation.
 
     `target_symbol` may itself be a previously generated composite (e.g. the
     output of `render_lipsync`) already sitting in `extract_dir`.
@@ -574,6 +578,8 @@ def attach_prop(extract_dir, target_symbol, prop_extract_dir, prop_symbol,
     xml_path = _symbol_xml_path(extract_dir, target_symbol)
     root = ET.parse(xml_path).getroot()
     dx, dy = offset
+    theta = math.radians(rotation_deg)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
     prop_frames_xml = []
     for layer in root.iter():
         if _local(layer.tag) != "DOMLayer":
@@ -588,16 +594,22 @@ def attach_prop(extract_dir, target_symbol, prop_extract_dir, prop_symbol,
             if inst is None:
                 continue
             a, b, c, d, tx, ty = _matrix_attrs(inst)
+            # rotate the prop's own local frame by rotation_deg, then apply
+            # the parent layer's real matrix on top (rigid attachment)
+            ra = cos_t * a + sin_t * c
+            rb = cos_t * b + sin_t * d
+            rc = -sin_t * a + cos_t * c
+            rd = -sin_t * b + cos_t * d
             comp_tx = a * dx + c * dy + tx
             comp_ty = b * dx + d * dy + ty
             is_tween = f.get("tweenType") == "motion"
             tween_attrs = ' tweenType="motion" motionTweenSnap="true"' if is_tween else ""
             mparts = []
-            if abs(a - 1) > 1e-9 or b or c or abs(d - 1) > 1e-9:
-                mparts += [f'a="{a}"']
-                if b: mparts.append(f'b="{b}"')
-                if c: mparts.append(f'c="{c}"')
-                mparts += [f'd="{d}"']
+            if abs(ra - 1) > 1e-9 or rb or rc or abs(rd - 1) > 1e-9:
+                mparts += [f'a="{ra}"']
+                if rb: mparts.append(f'b="{rb}"')
+                if rc: mparts.append(f'c="{rc}"')
+                mparts += [f'd="{rd}"']
             mparts += [f'tx="{comp_tx}"', f'ty="{comp_ty}"']
             prop_frames_xml.append(f'''<DOMFrame index="{idx}" duration="{dur}" keyMode="9728"{tween_attrs}>
               <elements>

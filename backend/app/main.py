@@ -185,6 +185,7 @@ async def fla_attach_prop(
     parent_layer: str = Form(...),
     offset_x: float = Form(0.0),
     offset_y: float = Form(0.0),
+    rotation_deg: float = Form(0.0),
     seconds: float = Form(0.0),
 ):
     """Rigidly attach a static prop (from a possibly different uploaded FLA --
@@ -207,7 +208,7 @@ async def fla_attach_prop(
     try:
         out_symbol = fla_inspector.attach_prop(
             extract_dir, symbol, prop_extract_dir, prop_symbol,
-            parent_layer, (offset_x, offset_y), out_symbol,
+            parent_layer, (offset_x, offset_y), out_symbol, rotation_deg=rotation_deg,
         )
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Prop attach nahi ho paya: {e}")
