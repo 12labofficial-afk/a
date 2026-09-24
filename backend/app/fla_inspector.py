@@ -19,6 +19,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+
+import numpy as np
 from PIL import Image
 from xml.etree import ElementTree as ET
 
@@ -410,8 +412,15 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
     variants = _build_mouth_variants(extract_dir, mouth_info["sub_symbol"],
                                       mouth_info["mouth_layer_name"], states)
 
+    # Calibrate against THIS clip's own loudness range, not a fixed constant --
+    # a normal speaking voice's RMS envelope rarely gets near an absolute 0.5,
+    # so a fixed ceiling meant the loudest real mouth shapes (wide-open,
+    # round-O) never got picked and the mouth kept cycling through just the
+    # bottom one or two states, which reads as "the same shape repeating".
+    loud_ceiling = max(float(np.percentile(audio.envelope, 95)), 1e-6)
+
     def amp_to_state(amp):
-        bucket = min(n_states - 1, int(amp * n_states / 0.5)) if amp < 0.5 else n_states - 1
+        bucket = int(amp * n_states / loud_ceiling)
         return states[max(0, min(bucket, len(states) - 1))]
 
     xml_path = _symbol_xml_path(extract_dir, target_symbol)
