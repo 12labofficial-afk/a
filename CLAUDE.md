@@ -69,6 +69,27 @@ fixed here -- don't reintroduce either:
    keyframes actually get used, for any audio file, not just one specific
    clip.
 
+## Prop attachment (`attach_prop` in fla_inspector.py)
+
+`POST /api/fla/{fla_id}/attach-prop` rigidly attaches a static prop from a
+*different* uploaded FLA (e.g. a weapon/tool drawn on its own, like
+"favda.fla") to one real layer of a character's animation (e.g. "Body").
+Every frame, the prop gets that layer's own real matrix (rotation and all)
+composed with a fixed local `(offset_x, offset_y)` -- it rides along with
+whatever real motion that layer already has; nothing about the character's
+motion is invented. The offset itself is a placement choice (found by
+rendering and looking, the same way the Shikari sit-on-rock composite was
+built), not a fabricated animation -- that distinction matters if this
+comes up again: never skip the "render it and actually look" step before
+picking/adjusting an offset.
+
+If a request needs a walk cycle and the target character's file doesn't
+have one (check every candidate symbol's leg layers for real tx/ty
+movement across frames, don't assume from the name) -- say so plainly and
+ask how to proceed, don't invent leg motion. Motu Sheth's "Long Talk", for
+instance, is a standing/talking animation with zero real leg movement, even
+though it has 121 total detected animations.
+
 ## Known non-bugs (don't re-investigate these)
 
 - A small black-wedge gap near the shoulder/sleeve seam in some renders is
