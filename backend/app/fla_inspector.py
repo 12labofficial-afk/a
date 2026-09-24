@@ -445,7 +445,12 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
         if name == mouth_info["target_layer"]:
             # audio-driven: chunk every hold segment (using THAT segment's own
             # real outer matrix/pivot, so the face stays exactly where the
-            # artist put it), keep real gesture tweens untouched
+            # artist put it). Real gesture tweens keep their own matrix/easing
+            # 100% untouched (we don't invent interpolated frames), but we
+            # still swap WHICH mouth pose plays during them -- otherwise the
+            # mouth freezes on its pre-tween pose for the whole tween and
+            # then jumps to catch up once the next hold starts, which is what
+            # makes the lipsync look like it's lagging behind the audio.
             for f in frames:
                 idx = int(f.get("index"))
                 dur = int(f.get("duration", 1))
@@ -453,7 +458,14 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
                     break
                 is_tween = f.get("tweenType") == "motion"
                 inst = _first_instance(f)
-                if is_tween or inst is None:
+                if inst is None:
+                    out_frames.append(ET.tostring(f, encoding="unicode"))
+                    continue
+                if is_tween:
+                    mid_frame = (idx + min(idx + dur, n_frames) - 1) / 2
+                    amp = audio.amplitude_at(mid_frame / fps)
+                    state = amp_to_state(amp)
+                    inst.set("libraryItemName", variants[state])
                     out_frames.append(ET.tostring(f, encoding="unicode"))
                     continue
                 outer_matrix = _matrix_attrs(inst)
