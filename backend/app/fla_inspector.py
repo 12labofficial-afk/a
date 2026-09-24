@@ -204,6 +204,316 @@ def safe_name(symbol_path):
     return re.sub(r"[^A-Za-z0-9_.-]", "_", symbol_path)
 
 
+# ---------------------------------------------------------------------------
+# Audio-driven lip-sync: swap the real mouth-shape sub-symbol inside a target
+# animation frame-by-frame to match an uploaded audio's amplitude, using only
+# assets that already exist in the file (no invented motion, no guessed
+# matrices -- every mouth pose and every attachment matrix is copied verbatim
+# from the artist's own real data).
+# ---------------------------------------------------------------------------
+
+MOUTH_NAME_RE = re.compile(r"\b(lip|mouth)\b", re.I)
+
+
+def _symbol_xml_path(extract_dir, symbol_path):
+    return os.path.join(extract_dir, "LIBRARY", *symbol_path.split("/")) + ".xml"
+
+
+def _first_instance(frame):
+    return next((e for e in frame.iter() if _local(e.tag) == "DOMSymbolInstance"), None)
+
+
+def _matrix_attrs(inst):
+    mat_el = None
+    for child in inst.iter():
+        if _local(child.tag) == "Matrix":
+            mat_el = child
+            break
+    a = float(mat_el.get("a", 1)) if mat_el is not None else 1.0
+    b = float(mat_el.get("b", 0)) if mat_el is not None else 0.0
+    c = float(mat_el.get("c", 0)) if mat_el is not None else 0.0
+    d = float(mat_el.get("d", 1)) if mat_el is not None else 1.0
+    tx = float(mat_el.get("tx", 0)) if mat_el is not None else 0.0
+    ty = float(mat_el.get("ty", 0)) if mat_el is not None else 0.0
+    return (a, b, c, d, tx, ty)
+
+
+def _pivot_attrs(inst):
+    for child in inst.iter():
+        if _local(child.tag) == "Point":
+            return (float(child.get("x", 0)), float(child.get("y", 0)))
+    return (0.0, 0.0)
+
+
+def find_mouth_symbol(extract_dir, target_symbol):
+    """Look at each layer of `target_symbol`; for the sub-symbol its first
+    frame places (e.g. a "Face" composite), check whether THAT sub-symbol has
+    a layer literally named "Lip"/"Mouth" (case-insensitive) referencing a
+    real multi-keyframe mouth symbol. This is exactly the manual trail used
+    for Shikari's and Motu Sheth's real lip-sync assets, generalized. Returns
+    None if no such structure is found anywhere in the target symbol.
+
+    `sub_symbol` (e.g. "Face copy 2") is the thing actually placed by
+    `target_layer` -- swapping its mouth requires building variant COPIES of
+    the whole sub_symbol (see _build_mouth_variants), not placing the mouth
+    symbol alone in target_layer, which would drop the rest of the face."""
+    xml_path = _symbol_xml_path(extract_dir, target_symbol)
+    if not os.path.exists(xml_path):
+        return None
+    root = ET.parse(xml_path).getroot()
+    for layer in root.iter():
+        if _local(layer.tag) != "DOMLayer":
+            continue
+        frame = next((f for f in layer.iter() if _local(f.tag) == "DOMFrame"), None)
+        if frame is None:
+            continue
+        inst = _first_instance(frame)
+        if inst is None:
+            continue
+        sub_symbol = inst.get("libraryItemName")
+        if not sub_symbol:
+            continue
+        sub_path = _symbol_xml_path(extract_dir, sub_symbol)
+        if not os.path.exists(sub_path):
+            continue
+        try:
+            sub_root = ET.parse(sub_path).getroot()
+        except ET.ParseError:
+            continue
+        for sub_layer in sub_root.iter():
+            if _local(sub_layer.tag) != "DOMLayer":
+                continue
+            if not MOUTH_NAME_RE.search(sub_layer.get("name") or ""):
+                continue
+            sub_frame = next((f for f in sub_layer.iter() if _local(f.tag) == "DOMFrame"), None)
+            if sub_frame is None:
+                continue
+            mouth_inst = _first_instance(sub_frame)
+            if mouth_inst is None:
+                continue
+            mouth_symbol = mouth_inst.get("libraryItemName")
+            mouth_path = _symbol_xml_path(extract_dir, mouth_symbol)
+            info = _analyze_symbol_file(mouth_path)
+            if info is None or info["keyframes"] < 3:
+                continue  # not a real multi-shape mouth set
+            return dict(
+                target_layer=layer.get("name"),
+                sub_symbol=sub_symbol,
+                mouth_layer_name=sub_layer.get("name"),
+                mouth_symbol=mouth_symbol,
+                mouth_keyframes=info["keyframes"],
+            )
+    return None
+
+
+def _build_mouth_variants(extract_dir, sub_symbol, mouth_layer_name, states):
+    """Copies of `sub_symbol` (e.g. "Face copy 2", eyes/eyebrows/nose/ears
+    and all) with ONLY its own mouth-layer's nested instance re-pinned to
+    each real keyframe in `states` -- same technique proven on Shikari's
+    "Chin with Mouth" and Motu Sheth's "Lip". Returns {state: variant_symbol_path}."""
+    src_path = _symbol_xml_path(extract_dir, sub_symbol)
+    src = open(src_path, encoding="utf-8").read()
+    orig_name_m = re.search(r'\bname="([^"]*)"', src)
+    orig_id_m = re.search(r'\bitemID="([^"]*)"', src)
+    orig_name = orig_name_m.group(1) if orig_name_m else sub_symbol
+    orig_id = orig_id_m.group(1) if orig_id_m else None
+
+    # locate the mouth layer's own <DOMSymbolInstance ...> opening tag to patch
+    layer_m = re.search(
+        rf'<DOMLayer name="{re.escape(mouth_layer_name)}".*?</DOMLayer>\s*(?=<DOMLayer|</layers>)',
+        src, re.S,
+    )
+    if layer_m is None:
+        raise RuntimeError(f"'{mouth_layer_name}' layer nahi mili '{sub_symbol}' me.")
+    layer_block = layer_m.group(0)
+    inst_m = re.search(r'<DOMSymbolInstance\b[^>]*>', layer_block)
+    if inst_m is None:
+        raise RuntimeError(f"'{mouth_layer_name}' me koi symbol instance nahi mila.")
+    orig_tag = inst_m.group(0)
+
+    variants = {}
+    for state in states:
+        if "firstFrame=" in orig_tag:
+            new_tag = re.sub(r'firstFrame="\d+"', f'firstFrame="{state}"', orig_tag)
+        else:
+            new_tag = orig_tag.replace(' loop="loop"', f' firstFrame="{state}" loop="single frame"')
+            if new_tag == orig_tag:  # no loop="loop" found either; append before closing >
+                new_tag = orig_tag[:-1] + f' firstFrame="{state}" loop="single frame">'
+        new_layer_block = layer_block.replace(orig_tag, new_tag, 1)
+        out = src.replace(layer_block, new_layer_block, 1)
+
+        variant_symbol = f"{sub_symbol}_mouth{state}"
+        variant_id = f"0000990{state:02d}-{abs(hash(sub_symbol)) % 10**8:08d}"
+        out = out.replace(f'name="{orig_name}"', f'name="{variant_symbol}"', 1)
+        if orig_id:
+            out = out.replace(f'itemID="{orig_id}"', f'itemID="{variant_id}"', 1)
+
+        out_path = _symbol_xml_path(extract_dir, variant_symbol)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        open(out_path, "w", encoding="utf-8").write(out)
+        variants[state] = variant_symbol
+
+    # register all variants in DOMDocument.xml
+    doc_path = os.path.join(extract_dir, "DOMDocument.xml")
+    doc = open(doc_path).read()
+    added = False
+    for state, variant_symbol in variants.items():
+        include = f'          <Include href="{variant_symbol}.xml" itemIcon="1" loadImmediate="false" itemID="mouthvar-{state}" lastModified="1"/>\n'
+        if f'{variant_symbol}.xml"' not in doc:
+            doc = doc.replace("     <symbols>\n", "     <symbols>\n" + include)
+            added = True
+    if added:
+        open(doc_path, "w").write(doc)
+    return variants
+
+
+def _mouth_state_frames(extract_dir, mouth_symbol, n_states=4):
+    """Evenly-spaced real keyframe indices across the mouth symbol's own
+    timeline, from its first (usually closed/neutral) to its most-open
+    poses -- a spread of genuinely distinct real mouth shapes to pick from."""
+    path = _symbol_xml_path(extract_dir, mouth_symbol)
+    root = ET.parse(path).getroot()
+    indices = sorted({
+        int(f.get("index")) for layer in root.iter() if _local(layer.tag) == "DOMLayer"
+        for f in layer.iter() if _local(f.tag) == "DOMFrame"
+    })
+    if not indices:
+        return [0] * n_states
+    step = max(1, len(indices) // n_states)
+    picked = [indices[min(i * step, len(indices) - 1)] for i in range(n_states)]
+    return picked
+
+
+def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
+                    n_states=4, out_size=1080, max_seconds=30.0):
+    """Render `target_symbol`'s real animation with its real mouth-shape
+    sub-symbol swapped, frame by frame, to match `audio_path`'s amplitude --
+    every part of every frame (body, hands, legs, and the mouth pose itself)
+    is real data lifted straight from the file; only WHICH real mouth
+    keyframe is shown at each moment is driven by the audio."""
+    from app.audio_utils import DialogueAudio
+
+    mouth_info = find_mouth_symbol(extract_dir, target_symbol)
+    if mouth_info is None:
+        raise RuntimeError(
+            f"'{target_symbol}' ke andar koi real mouth/lip-shape symbol nahi mila "
+            f"(koi layer 'Lip' ya 'Mouth' naam ki nahi mili jisme multiple real shapes hon)."
+        )
+
+    if fps is None:
+        fps = doc_frame_rate(extract_dir)
+    audio = DialogueAudio(audio_path, envelope_fps=int(fps))
+    duration = min(audio.duration_sec, max_seconds)
+    n_frames = max(1, int(duration * fps) + 1)
+
+    states = _mouth_state_frames(extract_dir, mouth_info["mouth_symbol"], n_states)
+    variants = _build_mouth_variants(extract_dir, mouth_info["sub_symbol"],
+                                      mouth_info["mouth_layer_name"], states)
+
+    def amp_to_state(amp):
+        bucket = min(n_states - 1, int(amp * n_states / 0.5)) if amp < 0.5 else n_states - 1
+        return states[max(0, min(bucket, len(states) - 1))]
+
+    xml_path = _symbol_xml_path(extract_dir, target_symbol)
+    root = ET.parse(xml_path).getroot()
+
+    def frame_xml(idx, dur, lib, matrix, pivot):
+        a, b, c, d, tx, ty = matrix
+        mparts = []
+        if abs(a - 1) > 1e-9 or b or c or abs(d - 1) > 1e-9:
+            mparts += [f'a="{a}"']
+            if b: mparts.append(f'b="{b}"')
+            if c: mparts.append(f'c="{c}"')
+            mparts += [f'd="{d}"']
+        mparts += [f'tx="{tx}"', f'ty="{ty}"']
+        return f'''<DOMFrame index="{idx}" duration="{dur}" keyMode="9728">
+              <elements>
+                <DOMSymbolInstance libraryItemName="{lib}" symbolType="graphic" loop="loop">
+                  <matrix><Matrix {" ".join(mparts)}/></matrix>
+                  <transformationPoint><Point x="{pivot[0]}" y="{pivot[1]}"/></transformationPoint>
+                </DOMSymbolInstance>
+              </elements>
+            </DOMFrame>'''
+
+    layers_xml = []
+    for layer in root.iter():
+        if _local(layer.tag) != "DOMLayer":
+            continue
+        name = layer.get("name")
+        frames = [f for f in layer.iter() if _local(f.tag) == "DOMFrame"]
+        out_frames = []
+        if name == mouth_info["target_layer"]:
+            # audio-driven: chunk every hold segment (using THAT segment's own
+            # real outer matrix/pivot, so the face stays exactly where the
+            # artist put it), keep real gesture tweens untouched
+            for f in frames:
+                idx = int(f.get("index"))
+                dur = int(f.get("duration", 1))
+                if idx >= n_frames:
+                    break
+                is_tween = f.get("tweenType") == "motion"
+                inst = _first_instance(f)
+                if is_tween or inst is None:
+                    out_frames.append(ET.tostring(f, encoding="unicode"))
+                    continue
+                outer_matrix = _matrix_attrs(inst)
+                outer_pivot = _pivot_attrs(inst)
+                chunk = max(1, int(fps // 8))  # ~8 mouth updates/sec
+                pos = idx
+                end = min(idx + dur, n_frames)
+                while pos < end:
+                    seg = min(chunk, end - pos)
+                    amp = audio.amplitude_at(pos / fps)
+                    state = amp_to_state(amp)
+                    out_frames.append(frame_xml(pos, seg, variants[state], outer_matrix, outer_pivot))
+                    pos += seg
+        else:
+            for f in frames:
+                idx = int(f.get("index"))
+                if idx >= n_frames:
+                    break
+                out_frames.append(ET.tostring(f, encoding="unicode"))
+        if not out_frames:
+            continue
+        layers_xml.append(f'        <DOMLayer name="{name}">\n          <frames>\n' +
+                           "\n".join(out_frames) + "\n          </frames>\n        </DOMLayer>")
+
+    sym_name = f"{os.path.basename(target_symbol)}_lipsync"
+    xml = f'''<DOMSymbolItem xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://ns.adobe.com/xfl/2008/" name="{sym_name}" itemID="00009900-00000001" symbolType="graphic" lastModified="1" lastUniqueIdentifier="1">
+  <timeline>
+    <DOMTimeline name="{sym_name}" layerDepthEnabled="true">
+      <layers>
+{os.linesep.join(layers_xml)}
+      </layers>
+    </DOMTimeline>
+  </timeline>
+</DOMSymbolItem>
+'''
+    lib_dir = os.path.join(extract_dir, "LIBRARY")
+    lipsync_xml_path = os.path.join(lib_dir, f"{sym_name}.xml")
+    open(lipsync_xml_path, "w").write(xml)
+
+    doc_path = os.path.join(extract_dir, "DOMDocument.xml")
+    doc = open(doc_path).read()
+    include = f'          <Include href="{sym_name}.xml" itemIcon="1" loadImmediate="false" itemID="00009900-00000001" lastModified="1"/>\n'
+    if f'{sym_name}.xml"' not in doc:
+        doc = doc.replace("     <symbols>\n", "     <symbols>\n" + include)
+        open(doc_path, "w").write(doc)
+
+    video_only = out_path + ".video.mp4"
+    render_preview(extract_dir, sym_name, video_only, max_frames=n_frames, out_size=out_size,
+                    fps=fps, min_seconds=0)
+
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", video_only, "-i", audio_path,
+         "-c:v", "copy", "-c:a", "aac", "-shortest", "-t", str(duration), out_path],
+        check=True, capture_output=True,
+    )
+    os.remove(video_only)
+    return dict(mouth_symbol=mouth_info["mouth_symbol"], mouth_layer=mouth_info["mouth_layer_name"],
+                target_layer=mouth_info["target_layer"], frames=n_frames, duration=duration)
+
+
 def doc_frame_rate(extract_dir, default=24):
     """The frame rate the artist authored the file at -- playing the frames
     back at any other rate makes the motion look sped-up or choppy."""

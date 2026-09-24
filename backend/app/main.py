@@ -146,6 +146,36 @@ def fla_preview(fla_id: str, symbol: str, seconds: float = 0.0):
     return FileResponse(out_path, media_type="video/mp4")
 
 
+@app.post("/api/fla/{fla_id}/lipsync")
+async def fla_lipsync(fla_id: str, symbol: str = Form(...), audio: UploadFile = File(...)):
+    """Real audio-driven lip-sync: finds a real mouth/lip-shape symbol inside
+    `symbol` and swaps it frame-by-frame to match the uploaded audio's
+    amplitude -- no invented motion, every mouth pose is a real keyframe."""
+    from app import fla_inspector
+
+    fla_dir = os.path.join(config.DATA_DIR, "fla", fla_id)
+    extract_dir = os.path.join(fla_dir, "extract")
+    if not os.path.isdir(extract_dir):
+        raise HTTPException(status_code=404, detail="Ye FLA nahi mili -- dubara upload karo.")
+
+    audio_dir = os.path.join(fla_dir, "lipsync_audio")
+    os.makedirs(audio_dir, exist_ok=True)
+    audio_path = os.path.join(audio_dir, f"{uuid.uuid4().hex[:12]}_{audio.filename}")
+    with open(audio_path, "wb") as f:
+        f.write(await audio.read())
+
+    out_dir = os.path.join(fla_dir, "lipsync")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{fla_inspector.safe_name(symbol)}_{uuid.uuid4().hex[:8]}.mp4")
+    try:
+        info = fla_inspector.render_lipsync(extract_dir, symbol, audio_path, out_path)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Lipsync nahi ban paya: {e}")
+
+    return FileResponse(out_path, media_type="video/mp4",
+                         headers={"X-Mouth-Symbol": info["mouth_symbol"], "X-Target-Layer": info["target_layer"]})
+
+
 @app.get("/api/jobs/{job_id}")
 def job_status(job_id: str):
     job = jobs.get_job(job_id)
