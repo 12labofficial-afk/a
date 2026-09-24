@@ -83,6 +83,15 @@ built), not a fabricated animation -- that distinction matters if this
 comes up again: never skip the "render it and actually look" step before
 picking/adjusting an offset.
 
+Prefer parenting to the actual HAND layer (not just "Body") when the prop
+should look gripped/held -- attach with `offset=(0,0)` first (that puts the
+prop's own origin exactly on the hand's real position), then find the hold
+angle with `rotation_deg` alone by rendering and looking; only add a
+nonzero offset if the grip point genuinely isn't at the prop's local
+origin. This is how Motu Sheth's favda ended up slung from his real right
+hand at the hip up over the opposite shoulder (`rotation_deg=-40`), instead
+of just resting across both shoulders unheld.
+
 If a request needs a walk cycle and the target character's file doesn't
 have one (check every candidate symbol's leg layers for real tx/ty
 movement across frames, don't assume from the name) -- say so plainly and
