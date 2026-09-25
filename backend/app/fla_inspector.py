@@ -468,6 +468,8 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
             </DOMFrame>'''
 
     layers_xml = []
+    body_layers_xml = []
+    face_layer_xml = None
     for layer in root.iter():
         if _local(layer.tag) != "DOMLayer":
             continue
@@ -508,13 +510,69 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
                     state = amp_to_state(amp)
                     out_frames.append(frame_xml(pos, seg, variants[state], outer_matrix, outer_pivot))
                     pos += seg
-        else:
-            for idx, f in looped(frames):
+        elif cycle_len >= n_frames:
+            # already long enough on its own -- no looping needed
+            for f in frames:
+                idx = int(f.get("index"))
+                if idx >= n_frames:
+                    break
                 out_frames.append(ET.tostring(f, encoding="unicode"))
+        else:
+            # Needs to repeat to cover the audio (e.g. a ~20-frame walk
+            # cycle under a 6s line). Pre-expanding this layer's own real
+            # frames into hundreds of raw DOMFrame entries (like the target
+            # layer above does) makes xfl2svg's nested-loop resolution
+            # blow up badly on any layer that itself nests a loop="loop"
+            # sub-symbol (confirmed: ~46 output frames rendered in ~6s,
+            # ~90 took over 2 minutes and was killed -- not a linear
+            # slowdown). Instead, wrap this layer's real, UNCHANGED frame
+            # sequence in its own tiny symbol and reference THAT once with
+            # loop="loop" -- xfl2svg's own native looping (the same
+            # mechanism already used efficiently by nested gesture loops
+            # like "Right Hand copy 2" in the real files) repeats it
+            # cheaply instead of us flattening it out by hand.
+            wrap_frames_xml = "\n".join(ET.tostring(f, encoding="unicode") for f in frames)
+            wrap_name = f"_LoopWrap_{re.sub(r'[^A-Za-z0-9_]', '_', name)}_{uuid.uuid4().hex[:6]}"
+            wrap_xml = f'''<DOMSymbolItem xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://ns.adobe.com/xfl/2008/" name="{wrap_name}" itemID="0000ee{uuid.uuid4().hex[:10]}" symbolType="graphic" lastModified="1" lastUniqueIdentifier="1">
+  <timeline>
+    <DOMTimeline name="{wrap_name}" layerDepthEnabled="true">
+      <layers>
+        <DOMLayer name="{name}">
+          <frames>
+{wrap_frames_xml}
+          </frames>
+        </DOMLayer>
+      </layers>
+    </DOMTimeline>
+  </timeline>
+</DOMSymbolItem>
+'''
+            wrap_lib_dir = os.path.join(extract_dir, "LIBRARY")
+            open(os.path.join(wrap_lib_dir, f"{wrap_name}.xml"), "w", encoding="utf-8").write(wrap_xml)
+            wrap_doc_path = os.path.join(extract_dir, "DOMDocument.xml")
+            wrap_doc = open(wrap_doc_path, encoding="utf-8").read()
+            wrap_include = f'          <Include href="{wrap_name}.xml" itemIcon="1" loadImmediate="false" itemID="loopwrap-{wrap_name}" lastModified="1"/>\n'
+            if f'{wrap_name}.xml"' not in wrap_doc:
+                wrap_doc = wrap_doc.replace("     <symbols>\n", "     <symbols>\n" + wrap_include)
+                open(wrap_doc_path, "w", encoding="utf-8").write(wrap_doc)
+            out_frames.append(
+                f'<DOMFrame index="0" duration="{n_frames}" keyMode="9728">\n'
+                f'              <elements>\n'
+                f'                <DOMSymbolInstance libraryItemName="{wrap_name}" symbolType="graphic" loop="loop">\n'
+                f'                  <matrix><Matrix/></matrix>\n'
+                f'                </DOMSymbolInstance>\n'
+                f'              </elements>\n'
+                f'            </DOMFrame>'
+            )
         if not out_frames:
             continue
-        layers_xml.append(f'        <DOMLayer name="{name}">\n          <frames>\n' +
-                           "\n".join(out_frames) + "\n          </frames>\n        </DOMLayer>")
+        layer_block = (f'        <DOMLayer name="{name}">\n          <frames>\n' +
+                        "\n".join(out_frames) + "\n          </frames>\n        </DOMLayer>")
+        layers_xml.append(layer_block)
+        if name == mouth_info["target_layer"]:
+            face_layer_xml = layer_block
+        else:
+            body_layers_xml.append(layer_block)
 
     sym_name = f"{os.path.basename(target_symbol)}_lipsync"
     xml = f'''<DOMSymbolItem xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://ns.adobe.com/xfl/2008/" name="{sym_name}" itemID="00009900-00000001" symbolType="graphic" lastModified="1" lastUniqueIdentifier="1">
@@ -539,8 +597,97 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
         open(doc_path, "w").write(doc)
 
     video_only = out_path + ".video.mp4"
-    render_preview(extract_dir, sym_name, video_only, max_frames=n_frames, out_size=out_size,
-                    fps=fps, min_seconds=0)
+
+    if cycle_len >= n_frames or not body_layers_xml or face_layer_xml is None:
+        # The common case (e.g. "Long Talk"): the real animation is already
+        # long enough, nothing needed looping, so it's one ordinary render.
+        render_preview(extract_dir, sym_name, video_only, max_frames=n_frames, out_size=out_size,
+                        fps=fps, min_seconds=0)
+    else:
+        # A short cyclic animation (e.g. a walk cycle) where every body part
+        # ALSO natively uses loop="loop" internally: rendering the target
+        # symbol's face layer and body layers TOGETHER in one xfl2svg pass
+        # hits a severe (non-linear) slowdown in xfl2svg's nested-loop
+        # resolution once several such loop-bearing layers combine with the
+        # audio-driven face-swapping -- confirmed by direct timing (the body
+        # alone renders 177 frames in ~0.3s; combined with the face, even
+        # 50 frames didn't finish in 30s+). Rendering the body and the face
+        # as two SEPARATE symbols (each fast on its own) against the same
+        # fixed viewBox, then alpha-compositing them frame by frame, sidesteps
+        # the slowdown entirely without changing what's actually drawn.
+        body_sym = f"{sym_name}_body"
+        body_xml = f'''<DOMSymbolItem xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://ns.adobe.com/xfl/2008/" name="{body_sym}" itemID="00009901-00000001" symbolType="graphic" lastModified="1" lastUniqueIdentifier="1">
+  <timeline>
+    <DOMTimeline name="{body_sym}" layerDepthEnabled="true">
+      <layers>
+{os.linesep.join(body_layers_xml)}
+      </layers>
+    </DOMTimeline>
+  </timeline>
+</DOMSymbolItem>
+'''
+        face_sym = f"{sym_name}_face"
+        face_xml = f'''<DOMSymbolItem xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://ns.adobe.com/xfl/2008/" name="{face_sym}" itemID="00009902-00000001" symbolType="graphic" lastModified="1" lastUniqueIdentifier="1">
+  <timeline>
+    <DOMTimeline name="{face_sym}" layerDepthEnabled="true">
+      <layers>
+{face_layer_xml}
+      </layers>
+    </DOMTimeline>
+  </timeline>
+</DOMSymbolItem>
+'''
+        open(os.path.join(lib_dir, f"{body_sym}.xml"), "w").write(body_xml)
+        open(os.path.join(lib_dir, f"{face_sym}.xml"), "w").write(face_xml)
+        doc = open(doc_path).read()
+        for extra_sym, extra_id in [(body_sym, "00009901-00000001"), (face_sym, "00009902-00000001")]:
+            inc = f'          <Include href="{extra_sym}.xml" itemIcon="1" loadImmediate="false" itemID="{extra_id}" lastModified="1"/>\n'
+            if f'{extra_sym}.xml"' not in doc:
+                doc = doc.replace("     <symbols>\n", "     <symbols>\n" + inc)
+        open(doc_path, "w").write(doc)
+
+        # one shared viewBox, computed off the ORIGINAL (fast, native-length)
+        # symbol, so the two separate renders line up pixel for pixel
+        orig_work = tempfile.mkdtemp(prefix="flavb_")
+        try:
+            r = subprocess.run(
+                ["xfl2svg", extract_dir, target_symbol, orig_work,
+                 "--timeline-type", "symbol", "--first-frame", "1", "--last-frame", str(cycle_len), "--no-background"],
+                capture_output=True, text=True,
+            )
+            orig_svgs = sorted(glob.glob(os.path.join(orig_work, "*.svg")))
+            if not orig_svgs:
+                raise RuntimeError((r.stderr or "xfl2svg render fail").strip()[:300])
+            viewbox = _svg_content_viewbox(orig_svgs)
+        finally:
+            shutil.rmtree(orig_work, ignore_errors=True)
+
+        body_frames, body_work = _render_rgba_frames(extract_dir, body_sym, n_frames, out_size, viewbox)
+        try:
+            face_safe_cap = max(cycle_len, 2 * cycle_len)
+            face_frames, face_work = _render_rgba_frames(extract_dir, face_sym, n_frames, out_size, viewbox,
+                                                           safe_cap=face_safe_cap)
+            try:
+                frame_dir = tempfile.mkdtemp(prefix="flacomposite_")
+                try:
+                    for i, (b, f) in enumerate(zip(body_frames, face_frames), start=1):
+                        canvas = Image.new("RGBA", (out_size, out_size), (24, 24, 24, 255))
+                        canvas.alpha_composite(b, (0, 0))
+                        canvas.alpha_composite(f, (0, 0))
+                        canvas.convert("RGB").save(os.path.join(frame_dir, f"f_{i:04d}.png"))
+                    os.makedirs(os.path.dirname(video_only) or ".", exist_ok=True)
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-framerate", str(fps),
+                         "-i", os.path.join(frame_dir, "f_%04d.png"),
+                         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", video_only],
+                        check=True, capture_output=True,
+                    )
+                finally:
+                    shutil.rmtree(frame_dir, ignore_errors=True)
+            finally:
+                shutil.rmtree(face_work, ignore_errors=True)
+        finally:
+            shutil.rmtree(body_work, ignore_errors=True)
 
     subprocess.run(
         ["ffmpeg", "-y", "-i", video_only, "-i", audio_path,
@@ -720,6 +867,113 @@ def doc_frame_rate(extract_dir, default=24):
 
 def _rsvg(args):
     subprocess.run(["rsvg-convert", *args], check=True)
+
+
+def _svg_content_viewbox(svgs, coarse_size=420, wide_off=-1500.0, wide_span=6000.0):
+    """The same coarse auto-fit pass render_preview uses, pulled out so a
+    viewBox can be computed once and reused across multiple separate
+    renders that need to line up pixel-for-pixel when composited."""
+    coarse_jobs = []
+    for svg_path in svgs:
+        data = open(svg_path, encoding="utf-8").read()
+        data = re.sub(r'viewBox="[^"]*"', f'viewBox="{wide_off} {wide_off} {wide_span} {wide_span}"', data)
+        data = re.sub(r'width="[^"]*px"', f'width="{coarse_size}px"', data)
+        data = re.sub(r'height="[^"]*px"', f'height="{coarse_size}px"', data)
+        fixed_svg = svg_path + ".coarse.svg"
+        open(fixed_svg, "w", encoding="utf-8").write(data)
+        png_path = svg_path + ".coarse.png"
+        coarse_jobs.append((["-w", str(coarse_size), "-h", str(coarse_size), fixed_svg, "-o", png_path], png_path))
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        list(pool.map(_rsvg, [j[0] for j in coarse_jobs]))
+
+    union = None
+    for _, png_path in coarse_jobs:
+        arr = np.array(Image.open(png_path).convert("RGBA"))
+        mask = arr[:, :, 3] > 10
+        ys, xs = np.where(mask)
+        if len(xs) == 0:
+            continue
+        b = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+        union = b if union is None else (
+            min(union[0], b[0]), min(union[1], b[1]), max(union[2], b[2]), max(union[3], b[3])
+        )
+    if union is None:
+        raise RuntimeError("Is symbol ke frames me koi drawn content nahi mila.")
+
+    units_per_px = wide_span / coarse_size
+    cx0 = wide_off + union[0] * units_per_px
+    cy0 = wide_off + union[1] * units_per_px
+    cx1 = wide_off + union[2] * units_per_px
+    cy1 = wide_off + union[3] * units_per_px
+    cw, ch = cx1 - cx0, cy1 - cy0
+    pad = max(cw, ch) * 0.12 + 5
+    cx0, cy0, cx1, cy1 = cx0 - pad, cy0 - pad, cx1 + pad, cy1 + pad
+    cw, ch = cx1 - cx0, cy1 - cy0
+    side = max(cw, ch, 1.0)
+    cx0 -= (side - cw) / 2
+    cy0 -= (side - ch) / 2
+    return cx0, cy0, side
+
+
+def _render_rgba_frames(extract_dir, symbol_path, n_frames, out_size, viewbox, safe_cap=None):
+    """Renders `symbol_path` (frames 1..n_frames) to transparent RGBA PIL
+    Images using a GIVEN, fixed viewbox (cx0, cy0, side) -- not auto-fit --
+    so this can be called on two DIFFERENT symbols (e.g. a body-only
+    composite and a face-only composite) and have both line up exactly
+    when alpha-composited together frame by frame.
+
+    `safe_cap`, if given, additionally limits how many frames get sent to
+    xfl2svg in one call -- confirmed by direct timing that a symbol built
+    from many short audio-driven tween fragments (like a fast walk-cycle's
+    face layer swapping mouth shape on every ~4-frame tween) hits a severe,
+    sharply-nonlinear xfl2svg slowdown past a certain fragment count (40
+    fragments: 0.16s: 44 fragments: 25s+ and climbing) -- so past that cap,
+    only the first `safe_cap` frames are actually rendered through xfl2svg,
+    then the result LOOPS (real content repeating, not held-and-frozen) to
+    reach the full `n_frames`."""
+    xml_path = _symbol_xml_path(extract_dir, symbol_path)
+    info = _analyze_symbol_file(xml_path)
+    content_len = info["duration"] if info else n_frames
+    request_frames = min(n_frames, content_len, safe_cap or n_frames)
+
+    work = tempfile.mkdtemp(prefix="flargba_")
+    try:
+        svg_dir = os.path.join(work, "svg")
+        os.makedirs(svg_dir, exist_ok=True)
+        r = subprocess.run(
+            ["xfl2svg", extract_dir, symbol_path, svg_dir,
+             "--timeline-type", "symbol", "--first-frame", "1", "--last-frame", str(request_frames), "--no-background"],
+            capture_output=True, text=True,
+        )
+        svgs = sorted(glob.glob(os.path.join(svg_dir, "*.svg")))
+        if not svgs:
+            raise RuntimeError((r.stderr or "xfl2svg render fail").strip()[:300])
+
+        cx0, cy0, side = viewbox
+        fine_jobs = []
+        for svg_path in svgs:
+            data = open(svg_path, encoding="utf-8").read()
+            data = re.sub(r'viewBox="[^"]*"', f'viewBox="{cx0} {cy0} {side} {side}"', data)
+            data = re.sub(r'width="[^"]*px"', f'width="{out_size}px"', data)
+            data = re.sub(r'height="[^"]*px"', f'height="{out_size}px"', data)
+            fixed_svg = svg_path + ".fine.svg"
+            open(fixed_svg, "w", encoding="utf-8").write(data)
+            raw_png = svg_path + ".fine.png"
+            fine_jobs.append((["-w", str(out_size), "-h", str(out_size), fixed_svg, "-o", raw_png], raw_png))
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            list(pool.map(_rsvg, [j[0] for j in fine_jobs]))
+
+        frames = [Image.open(png).convert("RGBA").copy() for _, png in fine_jobs]
+        if frames and len(frames) < n_frames:
+            # loop the real rendered window rather than freezing on the last
+            # pose -- keeps the mouth/body actually moving for the rest of
+            # the clip instead of going static
+            base = list(frames)
+            frames = [base[i % len(base)] for i in range(n_frames)]
+        return frames, work
+    except Exception:
+        shutil.rmtree(work, ignore_errors=True)
+        raise
 
 
 def render_preview(extract_dir, symbol_path, out_path, max_frames=300, out_size=1080, fps=None,
