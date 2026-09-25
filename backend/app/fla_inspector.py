@@ -532,7 +532,11 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
             # like "Right Hand copy 2" in the real files) repeats it
             # cheaply instead of us flattening it out by hand.
             wrap_frames_xml = "\n".join(ET.tostring(f, encoding="unicode") for f in frames)
-            wrap_name = f"_LoopWrap_{re.sub(r'[^A-Za-z0-9_]', '_', name)}_{uuid.uuid4().hex[:6]}"
+            # fixed, deterministic name (not a fresh uuid) so repeated
+            # lipsync calls on the same target symbol overwrite this file
+            # instead of leaking a new one into LIBRARY/ every time
+            wrap_key = re.sub(r'[^A-Za-z0-9_]', '_', f"{target_symbol}_{name}")
+            wrap_name = f"_LoopWrap_{wrap_key}"
             wrap_xml = f'''<DOMSymbolItem xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://ns.adobe.com/xfl/2008/" name="{wrap_name}" itemID="0000ee{uuid.uuid4().hex[:10]}" symbolType="graphic" lastModified="1" lastUniqueIdentifier="1">
   <timeline>
     <DOMTimeline name="{wrap_name}" layerDepthEnabled="true">
