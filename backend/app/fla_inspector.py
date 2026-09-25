@@ -337,10 +337,16 @@ def _build_mouth_variants(extract_dir, sub_symbol, mouth_layer_name, states):
     for state in states:
         if "firstFrame=" in orig_tag:
             new_tag = re.sub(r'firstFrame="\d+"', f'firstFrame="{state}"', orig_tag)
+            if not re.search(r'\bloop="single frame"', new_tag):
+                new_tag = re.sub(r'\bloop="[^"]*"', 'loop="single frame"', new_tag)
+        elif re.search(r'\bloop="[^"]*"', orig_tag):
+            # the artist's own tag already had SOME loop value (not always
+            # "loop" -- e.g. some characters' Lip instance is authored as
+            # loop="single frame" already) -- replace whatever it is, don't
+            # just blindly append or we'd end up with the attribute twice
+            new_tag = re.sub(r'\bloop="[^"]*"', f'firstFrame="{state}" loop="single frame"', orig_tag)
         else:
-            new_tag = orig_tag.replace(' loop="loop"', f' firstFrame="{state}" loop="single frame"')
-            if new_tag == orig_tag:  # no loop="loop" found either; append before closing >
-                new_tag = orig_tag[:-1] + f' firstFrame="{state}" loop="single frame">'
+            new_tag = orig_tag[:-1] + f' firstFrame="{state}" loop="single frame">'
         new_layer_block = layer_block.replace(orig_tag, new_tag, 1)
         out = src.replace(layer_block, new_layer_block, 1)
 
@@ -425,6 +431,23 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
 
     xml_path = _symbol_xml_path(extract_dir, target_symbol)
     root = ET.parse(xml_path).getroot()
+    cycle_info = _analyze_symbol_file(xml_path)
+    cycle_len = max(1, cycle_info["duration"] if cycle_info else 1)
+
+    def looped(frames):
+        # A short real animation (e.g. a ~20-frame walk cycle) needs to
+        # repeat to cover a longer audio track -- this replays the SAME
+        # real keyframes on a loop (like render_preview's own min_seconds
+        # looping), it doesn't invent any new poses.
+        reps = n_frames // cycle_len + 1
+        for rep in range(reps):
+            shift = rep * cycle_len
+            for f in frames:
+                shifted = int(f.get("index")) + shift
+                if shifted >= n_frames:
+                    return
+                f.set("index", str(shifted))
+                yield shifted, f
 
     def frame_xml(idx, dur, lib, matrix, pivot):
         a, b, c, d, tx, ty = matrix
@@ -460,11 +483,8 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
             # mouth freezes on its pre-tween pose for the whole tween and
             # then jumps to catch up once the next hold starts, which is what
             # makes the lipsync look like it's lagging behind the audio.
-            for f in frames:
-                idx = int(f.get("index"))
+            for idx, f in looped(frames):
                 dur = int(f.get("duration", 1))
-                if idx >= n_frames:
-                    break
                 is_tween = f.get("tweenType") == "motion"
                 inst = _first_instance(f)
                 if inst is None:
@@ -489,10 +509,7 @@ def render_lipsync(extract_dir, target_symbol, audio_path, out_path, fps=None,
                     out_frames.append(frame_xml(pos, seg, variants[state], outer_matrix, outer_pivot))
                     pos += seg
         else:
-            for f in frames:
-                idx = int(f.get("index"))
-                if idx >= n_frames:
-                    break
+            for idx, f in looped(frames):
                 out_frames.append(ET.tostring(f, encoding="unicode"))
         if not out_frames:
             continue
