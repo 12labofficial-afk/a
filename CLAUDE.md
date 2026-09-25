@@ -69,6 +69,34 @@ fixed here -- don't reintroduce either:
    keyframes actually get used, for any audio file, not just one specific
    clip.
 
+## Looping a short real animation to cover longer audio (render_lipsync)
+
+A short real animation (e.g. a ~20-frame walk cycle) needs its real
+keyframes REPEATED to cover a longer audio track -- never invented, just
+looped, same as render_preview's own min_seconds looping.
+
+Watch out: some characters' rig (e.g. Motu Sheth's "Mukhiya copy 2" walk)
+has EVERY body part natively using `loop="loop"` + `firstFrame=` internally
+(unlike "Long Talk", which uses plain tween/hold matrices and only ONE
+nested loop). Confirmed by direct timing: xfl2svg renders such a rig's
+body alone just fine (177 frames in ~0.3s) and the audio-swapped face
+alone is fine up to ~40 fragments, but rendering body + face TOGETHER in
+one symbol -- or pushing the face past ~40 fragments alone -- triggers a
+severe, sharply nonlinear slowdown in xfl2svg's own nested-loop resolution
+(44 fragments: 25s+ and still climbing; not a bug in our own XML, and not
+fixable by restructuring it further -- confirmed by isolating body-only,
+face-only, and combined renders separately with direct timing before
+concluding this). The fix already in `render_lipsync`: when looping is
+needed, render the body-only and face-only layers as two SEPARATE symbols
+against one shared, precomputed viewBox, then alpha-composite them in
+Python; the face render is additionally capped at a safe fragment count
+(`2 * cycle_len`) and loops at the PNG level past that. Don't try to fix
+this by tweaking XML generation again without re-confirming with direct
+`subprocess` timing first -- several plausible-looking XML fixes (stripping
+inherited `loop`/`firstFrame` attributes, wrapping in a single loop
+symbol) were tried and directly measured to NOT help; the split-render
+approach is the one that's actually proven fast.
+
 ## Prop attachment (`attach_prop` in fla_inspector.py)
 
 `POST /api/fla/{fla_id}/attach-prop` rigidly attaches a static prop from a
