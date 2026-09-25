@@ -664,6 +664,32 @@ def attach_prop(extract_dir, target_symbol, prop_extract_dir, prop_symbol,
     return out_symbol_name
 
 
+def quick_prop_preview(extract_dir, target_symbol, prop_extract_dir, prop_symbol,
+                        parent_layer, offset, rotation_deg, out_png_path, out_size=480):
+    """Fast single-frame PNG for tuning a prop's offset/rotation before
+    committing to a full video render. Reuses one fixed scratch symbol name
+    (`_ScratchPropPreview`) that gets overwritten every call, instead of
+    `attach_prop`'s normal unique-per-call name -- so trying 5-6 angles in a
+    row doesn't pile up junk symbols in LIBRARY/. Renders only 1 frame, no
+    audio, no looping -- just enough to see whether the placement looks
+    right, the same judgment call a person would make dragging the prop in
+    Adobe Animate's own editor, just without a live canvas to drag on."""
+    out_sym = attach_prop(extract_dir, target_symbol, prop_extract_dir, prop_symbol,
+                           parent_layer, offset, "_ScratchPropPreview", rotation_deg=rotation_deg)
+    work = tempfile.mkdtemp(prefix="flaquick_")
+    try:
+        tmp_mp4 = os.path.join(work, "f.mp4")
+        render_preview(extract_dir, out_sym, tmp_mp4, max_frames=1, out_size=out_size, min_seconds=0)
+        os.makedirs(os.path.dirname(out_png_path) or ".", exist_ok=True)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", tmp_mp4, "-vframes", "1", out_png_path],
+            check=True, capture_output=True,
+        )
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return out_png_path
+
+
 def doc_frame_rate(extract_dir, default=24):
     """The frame rate the artist authored the file at -- playing the frames
     back at any other rate makes the motion look sped-up or choppy."""
