@@ -97,6 +97,40 @@ inherited `loop`/`firstFrame` attributes, wrapping in a single loop
 symbol) were tried and directly measured to NOT help; the split-render
 approach is the one that's actually proven fast.
 
+## Real rendering bugs auto-repaired at upload time (repair_and_extract)
+
+`repair_and_extract` now runs a few automatic, non-inventive repair passes
+on every uploaded FLA before anything else touches it:
+
+- `_repair_broken_library_refs`: a `libraryItemName` reference that doesn't
+  resolve to a real file at that exact path (seen: "DHOTI&#032" vs the real
+  file sitting in a subfolder) gets the SAME real file copied to the path
+  its instances actually reference -- only when exactly one real file with
+  that basename exists; never guesses when ambiguous. Must `html.unescape()`
+  the raw regex-captured reference before comparing/copying -- a raw
+  "DHOTI&amp;#032" in the file text is the reference "DHOTI&#032" once an
+  XML parser (what xfl2svg uses) decodes it, and comparing the undecoded
+  form against real filenames silently fails to match.
+- `_repair_unsupported_radial_gradients`: xfl2svg has NO RadialGradient
+  support at all (confirmed by reading its own `parse_fill_style()` --  it
+  just warns and leaves `fill` unset, which then defaults to SVG's implicit
+  black). A shape shaded with one -- skin tone is a common case -- renders
+  as a solid black silhouette. Fixed by flattening each RadialGradient to a
+  flat SolidColor averaged from that SAME gradient's own real stops.
+- `_repair_missing_fill_colors`: a separate, unrelated bug with the same
+  symptom -- some real shapes have a bare `<SolidColor/>` with no `color`
+  attribute (a genuine data gap in the source file), which xfl2svg defaults
+  to opaque black too (seen: a black blob across a foot/toes in a sitting
+  pose). Unlike the gradient case there's no real color to recover, so
+  don't guess one -- make it transparent (`alpha="0"`) instead. A missing
+  detail not rendering is honest; a wrong color rendering is not.
+
+If a character's face/hands/skin render solid black, or some other shape
+is an inexplicable black blob, check for these two DIFFERENT root causes
+(gradient vs. missing color attribute) before assuming a new bug --
+`grep -c "RadialGradient"` / `grep -c "<SolidColor/>"` in the relevant
+LIBRARY file settles which one it is in seconds.
+
 ## Prop attachment (`attach_prop` in fla_inspector.py)
 
 `POST /api/fla/{fla_id}/attach-prop` rigidly attaches a static prop from a
