@@ -58,6 +58,112 @@ def repair_and_extract(fla_path, extract_dir):
             "-- LIBRARY folder nahi mila."
         )
 
+    _repair_broken_library_refs(extract_dir)
+    _repair_unsupported_radial_gradients(extract_dir)
+
+
+def _repair_broken_library_refs(extract_dir):
+    """Some real .fla exports have `libraryItemName` references that don't
+    match where the file actually sits (seen in the wild: a reference like
+    "DHOTI&#032" with no folder, while the real file lives at
+    "Duplicate Items Folder/DHOTI&#032.xml") -- a pre-existing data glitch
+    in the source file (garbled entity, or the symbol got moved into a
+    subfolder without its references being updated), not anything of ours.
+    xfl2svg resolves `libraryItemName` as a plain relative path with no
+    fallback search, so a stale reference is a hard crash. This finds any
+    reference that doesn't resolve, and -- ONLY when exactly one real file
+    elsewhere in LIBRARY/ has that exact basename -- copies THAT real file
+    to the plain expected path. This never invents content: it's the same
+    real symbol the file already has, just made reachable at the path its
+    own instances actually ask for."""
+    library_dir = os.path.join(extract_dir, "LIBRARY")
+    referenced = set()
+    for root_dir, _, files in os.walk(library_dir):
+        for fn in files:
+            if not fn.endswith(".xml"):
+                continue
+            try:
+                text = open(os.path.join(root_dir, fn), encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            referenced.update(re.findall(r'libraryItemName="([^"]+)"', text))
+
+    existing = set()
+    basename_to_paths = {}
+    for root_dir, _, files in os.walk(library_dir):
+        for fn in files:
+            if not fn.endswith(".xml"):
+                continue
+            full = os.path.join(root_dir, fn)
+            rel = os.path.relpath(full, library_dir)[:-4]
+            existing.add(rel)
+            basename_to_paths.setdefault(os.path.basename(rel), []).append(full)
+
+    for ref in referenced:
+        if ref in existing:
+            continue
+        candidates = basename_to_paths.get(os.path.basename(ref), [])
+        if len(candidates) != 1:
+            continue  # ambiguous or genuinely missing -- don't guess
+        expected_path = os.path.join(library_dir, *ref.split("/")) + ".xml"
+        os.makedirs(os.path.dirname(expected_path), exist_ok=True)
+        if not os.path.exists(expected_path):
+            shutil.copyfile(candidates[0], expected_path)
+
+
+_RADIAL_GRADIENT_RE = re.compile(r"<RadialGradient\b[^>]*>.*?</RadialGradient>", re.S)
+_GRADIENT_ENTRY_RE = re.compile(r'<GradientEntry\b[^>]*\bcolor="(#[0-9A-Fa-f]{6})"[^>]*\bratio="([^"]*)"[^>]*/?>')
+_GRADIENT_ENTRY_RE_ALT = re.compile(r'<GradientEntry\b[^>]*\bratio="([^"]*)"[^>]*\bcolor="(#[0-9A-Fa-f]{6})"[^>]*/?>')
+
+
+def _flatten_gradient_block(match):
+    """Real xfl2svg doesn't render RadialGradient fills at all (falls back
+    to no fill = SVG's implicit black), which is why skin/face/hand shapes
+    using a radial gradient for shading come out solid black. This doesn't
+    invent a color -- it averages the SAME real GradientEntry stops the
+    artist already authored into one flat, representative SolidColor."""
+    block = match.group(0)
+    entries = []
+    for m in _GRADIENT_ENTRY_RE.finditer(block):
+        entries.append((m.group(1), m.group(2)))
+    for m in _GRADIENT_ENTRY_RE_ALT.finditer(block):
+        entries.append((m.group(2), m.group(1)))
+    if not entries:
+        return block
+    r = g = b = 0
+    for color, _ in entries:
+        r += int(color[1:3], 16)
+        g += int(color[3:5], 16)
+        b += int(color[5:7], 16)
+    n = len(entries)
+    avg = f"#{r // n:02X}{g // n:02X}{b // n:02X}"
+    return f'<SolidColor color="{avg}"/>'
+
+
+def _repair_unsupported_radial_gradients(extract_dir):
+    """xfl2svg has no RadialGradient support (confirmed: parse_fill_style()
+    just warns and leaves `fill` unset, which SVG then defaults to black) --
+    so any shape shaded with one (skin tones are a common case) renders as
+    a solid black silhouette instead of its real color. Replaces each
+    RadialGradient with a flat SolidColor averaged from that SAME gradient's
+    own real stops -- not as good as a true gradient, but real color data,
+    not a guess, and far better than black."""
+    library_dir = os.path.join(extract_dir, "LIBRARY")
+    for root_dir, _, files in os.walk(library_dir):
+        for fn in files:
+            if not fn.endswith(".xml"):
+                continue
+            full = os.path.join(root_dir, fn)
+            try:
+                text = open(full, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            if "<RadialGradient" not in text:
+                continue
+            new_text = _RADIAL_GRADIENT_RE.sub(_flatten_gradient_block, text)
+            if new_text != text:
+                open(full, "w", encoding="utf-8").write(new_text)
+
 
 def _analyze_symbol_file(full_path):
     """Returns None if this isn't a usable DOMSymbolItem. Otherwise a dict
