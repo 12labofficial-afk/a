@@ -11,6 +11,7 @@ sitting still. We find those by parsing every LIBRARY/**/*.xml and counting
 DOMFrame elements per layer.
 """
 import glob
+import html
 import math
 import os
 import re
@@ -86,7 +87,14 @@ def _repair_broken_library_refs(extract_dir):
                 text = open(os.path.join(root_dir, fn), encoding="utf-8", errors="ignore").read()
             except OSError:
                 continue
-            referenced.update(re.findall(r'libraryItemName="([^"]+)"', text))
+            # an XML parser (what xfl2svg actually uses) decodes entities
+            # in attribute values -- e.g. a raw "DHOTI&amp;#032" in the file
+            # is really the reference "DHOTI&#032" once parsed -- so match
+            # that same decoding here, or every lookup below is comparing
+            # against the wrong string.
+            referenced.update(
+                html.unescape(m) for m in re.findall(r'libraryItemName="([^"]+)"', text)
+            )
 
     existing = set()
     basename_to_paths = {}
