@@ -61,6 +61,7 @@ def repair_and_extract(fla_path, extract_dir):
 
     _repair_broken_library_refs(extract_dir)
     _repair_unsupported_radial_gradients(extract_dir)
+    _repair_missing_fill_colors(extract_dir)
 
 
 def _repair_broken_library_refs(extract_dir):
@@ -169,6 +170,38 @@ def _repair_unsupported_radial_gradients(extract_dir):
             if "<RadialGradient" not in text:
                 continue
             new_text = _RADIAL_GRADIENT_RE.sub(_flatten_gradient_block, text)
+            if new_text != text:
+                open(full, "w", encoding="utf-8").write(new_text)
+
+
+_EMPTY_SOLID_COLOR_RE = re.compile(r"<SolidColor\s*/>")
+
+
+def _repair_missing_fill_colors(extract_dir):
+    """A real, separate glitch from the RadialGradient one: some real
+    shapes have a <SolidColor/> with no `color` attribute at all (a data
+    gap in the source file, not something we introduced). xfl2svg's
+    parse_solid_color() falls back to "#000000" for a missing `color` --
+    opaque black -- which is exactly as wrong-looking as the gradient bug
+    (seen on this file: a black blob across toes/foot). There's no real
+    color to recover here (unlike the gradient case, there are no color
+    stops to average), so guessing a specific color would be inventing
+    data. Making the fill fully transparent instead is the honest choice:
+    that one small missing detail just doesn't render, instead of
+    rendering as a wrong, jarring color."""
+    library_dir = os.path.join(extract_dir, "LIBRARY")
+    for root_dir, _, files in os.walk(library_dir):
+        for fn in files:
+            if not fn.endswith(".xml"):
+                continue
+            full = os.path.join(root_dir, fn)
+            try:
+                text = open(full, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            if "<SolidColor/>" not in text and "<SolidColor />" not in text:
+                continue
+            new_text = _EMPTY_SOLID_COLOR_RE.sub('<SolidColor alpha="0"/>', text)
             if new_text != text:
                 open(full, "w", encoding="utf-8").write(new_text)
 
