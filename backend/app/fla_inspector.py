@@ -214,7 +214,7 @@ def safe_name(symbol_path):
 # from the artist's own real data).
 # ---------------------------------------------------------------------------
 
-MOUTH_NAME_RE = re.compile(r"\b(lip|mouth)\b", re.I)
+MOUTH_NAME_RE = re.compile(r"\b(lip|lips|mouth|mouths)\b", re.I)
 
 
 def _symbol_xml_path(extract_dir, symbol_path):
