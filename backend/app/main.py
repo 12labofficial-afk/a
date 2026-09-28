@@ -227,6 +227,44 @@ async def fla_attach_prop(
     return FileResponse(out_path, media_type="video/mp4", headers={"X-Composite-Symbol": out_symbol})
 
 
+@app.get("/api/fla/{fla_id}/rig")
+def fla_rig(fla_id: str, symbol: str):
+    """Real per-part rig data for the manual posing/animation editor: every
+    layer's real symbol, its real base matrix/pivot, a real parent part
+    (only when the file has genuine Bone Tool data -- never guessed), and a
+    standalone cutout image of that part (base64 PNG, transparent, on a
+    fixed coordinate scale so the real matrix places it correctly)."""
+    import base64
+    from app import fla_inspector
+
+    extract_dir = os.path.join(config.DATA_DIR, "fla", fla_id, "extract")
+    if not os.path.isdir(extract_dir):
+        raise HTTPException(status_code=404, detail="Ye FLA nahi mili -- dubara upload karo.")
+
+    try:
+        rig = fla_inspector.extract_character_parts(extract_dir, symbol)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Rig nahi nikal paya: {e}")
+
+    parts_dir = os.path.join(config.DATA_DIR, "fla", fla_id, "rig_parts")
+    os.makedirs(parts_dir, exist_ok=True)
+    out_parts = []
+    for i, part in enumerate(rig["parts"]):
+        png_path = os.path.join(parts_dir, f"{fla_inspector.safe_name(part['lib'])}.png")
+        if not os.path.exists(png_path):
+            try:
+                img_info = fla_inspector.render_part_cutout(extract_dir, part["lib"], png_path)
+            except Exception as e:
+                continue
+        else:
+            img_info = dict(half_extent=900, px_per_unit=0.7, image_size=1260)
+        with open(png_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        out_parts.append(dict(**part, image=f"data:image/png;base64,{b64}", **img_info))
+
+    return dict(fla_id=fla_id, symbol=symbol, fps=rig["fps"], parts=out_parts)
+
+
 @app.get("/api/jobs/{job_id}")
 def job_status(job_id: str):
     job = jobs.get_job(job_id)

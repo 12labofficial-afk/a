@@ -1326,3 +1326,140 @@ def render_preview(extract_dir, symbol_path, out_path, max_frames=300, out_size=
         )
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def render_part_cutout(extract_dir, lib_symbol, out_png_path, half_extent=900, px_per_unit=0.7):
+    """Renders ONE real part symbol (e.g. "UP LEG", "HEAF") as a standalone
+    transparent PNG, using a FIXED (not auto-fit) viewBox centered on the
+    symbol's own local origin (0,0) -- unlike render_preview's cropped,
+    auto-fit output, this keeps a known, consistent mapping from XFL local
+    units to image pixels (image center = local origin, `px_per_unit` scale)
+    so the real per-frame matrix from the file can be reapplied later (in a
+    browser, via an SVG transform) and land the part exactly where the
+    artist's own data says it should be -- no guessing where the image's
+    "anchor" is."""
+    xml_path = _symbol_xml_path(extract_dir, lib_symbol)
+    if not os.path.exists(xml_path):
+        raise RuntimeError(f"Part symbol '{lib_symbol}' library me nahi mila.")
+    work = tempfile.mkdtemp(prefix="flapart_")
+    try:
+        svg_dir = os.path.join(work, "svg")
+        os.makedirs(svg_dir, exist_ok=True)
+        r = subprocess.run(
+            ["xfl2svg", extract_dir, lib_symbol, svg_dir,
+             "--timeline-type", "symbol", "--first-frame", "1", "--last-frame", "1", "--no-background"],
+            capture_output=True, text=True,
+        )
+        svgs = sorted(glob.glob(os.path.join(svg_dir, "*.svg")))
+        if not svgs:
+            raise RuntimeError((r.stderr or "xfl2svg render fail").strip()[:300])
+        size = int(2 * half_extent * px_per_unit)
+        data = open(svgs[0], encoding="utf-8").read()
+        data = re.sub(r'viewBox="[^"]*"', f'viewBox="{-half_extent} {-half_extent} {2*half_extent} {2*half_extent}"', data)
+        data = re.sub(r'width="[^"]*px"', f'width="{size}px"', data)
+        data = re.sub(r'height="[^"]*px"', f'height="{size}px"', data)
+        fixed_svg = svgs[0] + ".fixed.svg"
+        open(fixed_svg, "w", encoding="utf-8").write(data)
+        os.makedirs(os.path.dirname(out_png_path) or ".", exist_ok=True)
+        _rsvg(["-w", str(size), "-h", str(size), fixed_svg, "-o", out_png_path])
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return dict(half_extent=half_extent, px_per_unit=px_per_unit, image_size=int(2 * half_extent * px_per_unit))
+
+
+def _ik_hierarchy(frame_element):
+    """Walks a real <IKTree> (see list_scene_timelines' has_ik_bones note
+    for what this data actually is) and returns {ikNode_name: parent_ikNode_name}
+    -- the REAL parent-bone each IK-controlled part is attached to, exactly
+    as the artist rigged it. Empty dict if this frame has no IKTree."""
+    parents = {}
+    iktree = None
+    for el in frame_element.iter():
+        if _local(el.tag) == "IKTree":
+            iktree = el
+            break
+    if iktree is None:
+        return parents
+
+    def walk(node, parent_name):
+        name = node.get("name")
+        if name and parent_name:
+            parents[name] = parent_name
+        child_container = None
+        for c in node:
+            if _local(c.tag) == "childNodes":
+                child_container = c
+                break
+        if child_container is not None:
+            for child in child_container:
+                walk(child, name)
+
+    for top in iktree:
+        if _local(top.tag) in ("IKNode", "ChildNode"):
+            walk(top, None)
+    return parents
+
+
+def extract_character_parts(extract_dir, target_symbol):
+    """Real per-part rig data for `target_symbol`, meant for a manual posing/
+    animation tool: for every layer, the REAL symbol it places, its REAL
+    base matrix + pivot (frame 0, exactly as authored), and -- ONLY when
+    the file actually has real Bone Tool data for this symbol -- the REAL
+    parent part it's attached to. When there's no real IK data (most
+    files), `parent` is None for everything: there is no real hierarchy to
+    report, and inventing one would violate the whole point of this tool.
+    A human can still rig it by hand in the editor; this just refuses to
+    guess it for them.
+
+    Returns {"parts": [...], "fps": <real authored frame rate>}."""
+    xml_path = _symbol_xml_path(extract_dir, target_symbol)
+    if not os.path.exists(xml_path):
+        raise RuntimeError(f"Symbol '{target_symbol}' library me nahi mila.")
+    root = ET.parse(xml_path).getroot()
+
+    ik_parents = {}
+    parts = []
+    ik_name_to_part = {}
+    for layer in root.iter():
+        if _local(layer.tag) != "DOMLayer":
+            continue
+        frame = next((f for f in layer.iter() if _local(f.tag) == "DOMFrame"), None)
+        if frame is None:
+            continue
+        if not ik_parents:
+            ik_parents = _ik_hierarchy(frame)
+        # A real bone-rigged layer (e.g. "Armature_1") places MULTIPLE parts
+        # in ONE <elements> block, not just one -- collect every instance,
+        # not only the first, or every part but the first goes missing.
+        elements_el = next((c for c in frame if _local(c.tag) == "elements"), frame)
+        insts = [e for e in elements_el if _local(e.tag) == "DOMSymbolInstance"]
+        for inst in insts:
+            lib = inst.get("libraryItemName")
+            if not lib:
+                continue
+            matrix = _matrix_attrs(inst)
+            pivot = _pivot_attrs(inst)
+            ik_name = inst.get("name")
+            part_name = (os.path.basename(lib) if len(insts) > 1 else layer.get("name")) or ik_name
+            part = dict(name=part_name, lib=lib, matrix=list(matrix), pivot=list(pivot),
+                        ik_name=ik_name, parent=None)
+            parts.append(part)
+            if ik_name:
+                ik_name_to_part[ik_name] = part_name
+
+    if ik_parents:
+        for part in parts:
+            ik_name = part.pop("ik_name", None)
+            parent_ik_name = ik_parents.get(ik_name) if ik_name else None
+            if parent_ik_name and parent_ik_name in ik_name_to_part:
+                parent_part_name = ik_name_to_part[parent_ik_name]
+                # the IK tree's own root lists itself as its own single
+                # child (an Adobe format quirk, not a real cycle) -- that's
+                # not a real parent relationship
+                if parent_part_name != part["name"]:
+                    part["parent"] = parent_part_name
+    else:
+        for part in parts:
+            part.pop("ik_name", None)
+
+    return dict(parts=parts, fps=doc_frame_rate(extract_dir))
