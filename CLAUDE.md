@@ -21,12 +21,15 @@ into `.fla`/XFL XML and writing a one-off script for that one request.
 ## Where things live
 
 - `backend/app/fla_inspector.py` -- all FLA/XFL parsing, animation
-  detection, preview rendering, and lip-sync generation.
+  detection, preview rendering, lip-sync generation, and real-rig
+  extraction (`extract_character_parts`, `render_part_cutout`).
 - `backend/app/main.py` -- FastAPI endpoints: `/api/fla/upload`,
   `/api/fla/{fla_id}/animations`, `/api/fla/{fla_id}/preview`,
-  `POST /api/fla/{fla_id}/lipsync`.
+  `POST /api/fla/{fla_id}/lipsync`, `GET /api/fla/{fla_id}/rig`.
 - `backend/app/audio_utils.py` -- `DialogueAudio` (RMS amplitude envelope
   from an uploaded audio file), reused by the lip-sync feature.
+- `frontend/rig_editor.html` + `frontend/rig_editor.js` -- the manual
+  rig-posing/animation editor (see its own section below).
 - Deployed HF Space: `yashsharma463/Otsm` (flat file layout, no
   subfolders, since HF's browser upload doesn't preserve folder structure).
 
@@ -38,6 +41,15 @@ processes `reversed(list(enumerate(layers)))`, i.e. back-to-front, so the
 first-listed layer is drawn last = on top.) Never reorder layers when
 generating a composite symbol -- always preserve the original file's own
 `<layers>` order exactly.
+
+This reversal is `<DOMLayer>`-siblings-only. Multiple `<DOMSymbolInstance>`
+elements sitting together inside ONE layer's `<elements>` block (a real
+armature layer commonly holds every rig part this way) are walked by
+`svg_renderer.py` with a plain `enumerate()`, no `reversed()` -- so THEIR
+order is plain-SVG-native: first-in-document = drawn first = BACK-most,
+last-in-document = FRONT-most. Applying the layer rule to these siblings
+too (tried once while debugging the rig editor) is backwards and was
+reverted -- always preserve their real file order as-is, don't reverse it.
 
 ## Lip-sync feature (`render_lipsync` in fla_inspector.py)
 
@@ -122,6 +134,60 @@ files, both a clean real walk cycle, rendered with no crash beyond the
 usual gradient/mask warnings) -- so once found, it's just as renderable
 as any other real animation, nothing special needed beyond `--timeline-type
 scene`.
+
+## Manual rig-posing/animation editor (rig_editor.html/js, extract_character_parts)
+
+`GET /api/fla/{fla_id}/rig?symbol=...` -> `extract_character_parts` pulls a
+symbol's REAL parts out of the file: each part's real matrix, and -- only
+when the file genuinely has one -- its real parent from the `<IKTree>` bone
+hierarchy (walked recursively via ElementTree over nested `childNodes`, not
+a flat regex, or nesting depth is lost). When there's no real IK tree, parts
+come back with no parent and the human assigns one by hand in the editor;
+hierarchy is never guessed. `render_part_cutout` renders each part to its
+own transparent PNG on a FIXED viewBox centered on the part's local origin
+(not auto-fit), so a real per-frame matrix can be reapplied to it later and
+land it correctly.
+
+Real per-part matrices as stored in the file are ABSOLUTE (in the character
+symbol's own coordinate space), not relative to a parent part.
+`extract_character_parts` converts each non-root part to a PARENT-LOCAL
+matrix (`local = inverse(parent_absolute) . child_absolute`) so the editor
+can nest each part inside its parent's SVG `<g>` and get "child follows
+parent" for free from SVG's own transform composition, instead of
+propagating drags by hand. Verified by recomposing: `parent_world .
+local` reproduces the original absolute matrix to ~1e-13 (float noise).
+
+Two real bugs already hit building this -- don't reintroduce either:
+
+1. **A code fix on disk means nothing to an already-running server.** The
+   absolute-to-local conversion above was correct in `fla_inspector.py`
+   the whole time it was being debugged, but the running `uvicorn`
+   process had been started BEFORE that code was written, so every
+   `/rig` request it served was still returning raw absolute matrices
+   (Python doesn't hot-reload a module already imported into a running
+   process; this server is started with no `--reload`). Symptom looked
+   exactly like a math bug: each part's world matrix ended up scaled by
+   an extra copy of its parent's scale (a 3-deep chain literally rendered
+   at scale^3, e.g. the head buried tiny behind the torso). Before
+   concluding a math/data bug when server output disagrees with a
+   `python3 -c` check of the same function, restart the actual server
+   process and recheck -- a stale process is a real, recurring trap in
+   this sandbox (see also the earlier `nohup ... & disown` unreliability
+   noted in session history; prefer the Bash tool's `run_in_background`).
+2. **The selection-highlight box must not outline the full cutout
+   canvas.** Every part's PNG is rendered onto the SAME fixed-size
+   `half_extent` box regardless of that part's real on-screen size (a
+   tiny fingertip gets the identical box as the head). Outlining that
+   whole box (via CSS `outline` on the image's own element) looked fine
+   for big parts but, for a small part several bone-levels deep, turned
+   into a huge misleadingly rotated box once every ancestor's rotation
+   composed into it. Fixed with a small FIXED-size marker `<rect>` at the
+   part's own origin instead of outlining the cutout canvas.
+
+The retarget tab matches a recorded/loaded animation JSON's parts to a
+DIFFERENT character's real parts by NAME and reports any that don't match
+(`missingParts`) instead of silently dropping or guessing a substitute --
+never invent a mapping between two characters' differently-named parts.
 
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
