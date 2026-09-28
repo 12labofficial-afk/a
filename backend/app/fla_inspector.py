@@ -217,18 +217,37 @@ def _analyze_symbol_file(full_path):
     root = tree.getroot()
     if _local(root.tag) != "DOMSymbolItem":
         return None
+    info = _analyze_timeline_element(root)
+    info["symbol_type"] = root.get("symbolType", "graphic")
+    return info
 
+
+def _analyze_timeline_element(timeline_root):
+    """Core of _analyze_symbol_file, but works on any element with
+    <DOMLayer> descendants -- a library symbol's own root, OR a
+    <DOMTimeline> straight off the Stage/Scene (see list_scene_timelines).
+    Real bone/IK-rigged animations are sometimes authored directly on the
+    Stage timeline rather than as a reusable library symbol (confirmed: two
+    separate real files with a genuine walk cycle built entirely out of
+    <IKTree>/<IKNode>/boneName elements, tweenType="IK pose", living only
+    on "Scene 1" and invisible to a LIBRARY-only scan) -- so this must be
+    reusable for both, not just symbols."""
     max_keyframes = 0
     total_duration = 0
     layer_count = 0
     nested_refs = set()
-    for layer in root.iter():
+    has_ik = False
+    for layer in timeline_root.iter():
         if _local(layer.tag) != "DOMLayer":
             continue
         layer_count += 1
+        if layer.get("animationType") == "IK pose":
+            has_ik = True
         frames = [f for f in layer.iter() if _local(f.tag) == "DOMFrame"]
         max_keyframes = max(max_keyframes, len(frames))
         for f in frames:
+            if f.get("isIKPose") == "true":
+                has_ik = True
             try:
                 idx = int(f.get("index", "0"))
                 dur = int(f.get("duration", "1"))
@@ -245,9 +264,44 @@ def _analyze_symbol_file(full_path):
         keyframes=max_keyframes,
         duration=max(total_duration, 1),
         layers=layer_count,
-        symbol_type=root.get("symbolType", "graphic"),
         nested_parts=len(nested_refs),
+        has_ik_bones=has_ik,
     )
+
+
+def list_scene_timelines(extract_dir):
+    """List the REAL timelines that live directly on the Stage/Scene
+    (DOMDocument.xml's own <timelines>), not inside any LIBRARY symbol.
+    Most .fla files don't use this -- the Stage just holds a static
+    instance of a library symbol, and all the real motion is in LIBRARY/.
+    But some real files build a whole bone/IK-rigged animation (a walk
+    cycle, seen twice) directly on the Stage timeline instead, which a
+    LIBRARY-only scan completely misses. Returns real, analyzed timelines
+    (same shape as list_animated_symbols' entries, `symbol` prefixed with
+    "Scene/") for any Stage timeline with real motion (keyframes >= 2)."""
+    doc_path = os.path.join(extract_dir, "DOMDocument.xml")
+    if not os.path.exists(doc_path):
+        return []
+    try:
+        root = ET.parse(doc_path).getroot()
+    except ET.ParseError:
+        return []
+    results = []
+    for timeline in root.iter():
+        if _local(timeline.tag) != "DOMTimeline":
+            continue
+        name = timeline.get("name") or "Scene"
+        info = _analyze_timeline_element(timeline)
+        if info["keyframes"] < 2:
+            continue
+        results.append(dict(
+            symbol=f"Scene/{name}",
+            display_name=name,
+            role="character",
+            symbol_type="scene",
+            **info,
+        ))
+    return results
 
 
 def find_stage_symbols(extract_dir):
@@ -343,6 +397,8 @@ def list_animated_symbols(extract_dir, min_keyframes=2, composite_threshold=6):
             continue
         results.append(dict(symbol=symbol_path, display_name=os.path.basename(symbol_path),
                              role=role, **info))
+
+    results.extend(list_scene_timelines(extract_dir))
 
     role_rank = {"character": 0, "animation": 1, "part": 2}
     results.sort(key=lambda r: (role_rank.get(r["role"], 3), -r["keyframes"]))
@@ -1130,13 +1186,39 @@ def _render_rgba_frames(extract_dir, symbol_path, n_frames, out_size, viewbox, s
 def render_preview(extract_dir, symbol_path, out_path, max_frames=300, out_size=1080, fps=None,
                    min_seconds=0.0):
     """Render a symbol's own timeline to an mp4 at the file's authored frame
-    rate. If the timeline is shorter than `min_seconds`, it loops."""
-    xml_path = os.path.join(extract_dir, "LIBRARY", *symbol_path.split("/")) + ".xml"
-    if not os.path.exists(xml_path):
-        raise RuntimeError(f"Symbol '{symbol_path}' library me nahi mila.")
-    info = _analyze_symbol_file(xml_path)
-    if info is None:
-        raise RuntimeError(f"'{symbol_path}' ek valid symbol nahi hai.")
+    rate. If the timeline is shorter than `min_seconds`, it loops.
+
+    `symbol_path` prefixed "Scene/" (as returned by list_scene_timelines)
+    renders that Stage/Scene timeline directly instead of a LIBRARY symbol --
+    some real files build a whole bone/IK-rigged animation straight on the
+    Stage rather than as a reusable symbol."""
+    is_scene = symbol_path.startswith("Scene/")
+    if is_scene:
+        scene_name = symbol_path[len("Scene/"):]
+        doc_path = os.path.join(extract_dir, "DOMDocument.xml")
+        try:
+            doc_root = ET.parse(doc_path).getroot()
+        except (OSError, ET.ParseError):
+            raise RuntimeError(f"'{symbol_path}' ke liye DOMDocument.xml nahi padh paya.")
+        timeline_el = next(
+            (t for t in doc_root.iter()
+             if _local(t.tag) == "DOMTimeline" and t.get("name") == scene_name),
+            None,
+        )
+        if timeline_el is None:
+            raise RuntimeError(f"Scene timeline '{scene_name}' nahi mili.")
+        info = _analyze_timeline_element(timeline_el)
+        xfl2svg_timeline_arg = scene_name
+        xfl2svg_timeline_type = "scene"
+    else:
+        xml_path = os.path.join(extract_dir, "LIBRARY", *symbol_path.split("/")) + ".xml"
+        if not os.path.exists(xml_path):
+            raise RuntimeError(f"Symbol '{symbol_path}' library me nahi mila.")
+        info = _analyze_symbol_file(xml_path)
+        if info is None:
+            raise RuntimeError(f"'{symbol_path}' ek valid symbol nahi hai.")
+        xfl2svg_timeline_arg = symbol_path
+        xfl2svg_timeline_type = "symbol"
 
     if fps is None:
         fps = doc_frame_rate(extract_dir)
@@ -1146,8 +1228,8 @@ def render_preview(extract_dir, symbol_path, out_path, max_frames=300, out_size=
         svg_dir = os.path.join(work, "svg")
         os.makedirs(svg_dir, exist_ok=True)
         r = subprocess.run(
-            ["xfl2svg", extract_dir, symbol_path, svg_dir,
-             "--timeline-type", "symbol", "--first-frame", "1", "--last-frame", str(total), "--no-background"],
+            ["xfl2svg", extract_dir, xfl2svg_timeline_arg, svg_dir,
+             "--timeline-type", xfl2svg_timeline_type, "--first-frame", "1", "--last-frame", str(total), "--no-background"],
             capture_output=True, text=True,
         )
         svgs = sorted(glob.glob(os.path.join(svg_dir, "*.svg")))
