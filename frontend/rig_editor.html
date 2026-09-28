@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Rig Animation Editor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
+      background: linear-gradient(135deg, #0f172a, #1e1b4b);
+      color: #f1f5f9; min-height: 100vh; padding: 24px 16px 60px;
+    }
+    .wrap { max-width: 1280px; margin: 0 auto; }
+    h1 { font-size: 1.6rem; margin-bottom: 4px; }
+    h2 { font-size: 1.05rem; margin: 0 0 10px; }
+    p.sub { color: #94a3b8; margin-top: 0; margin-bottom: 20px; }
+    p.sub a { color: #fb923c; }
+    .card {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px; padding: 18px; margin-bottom: 16px;
+    }
+    label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.88rem; }
+    small { display: block; color: #94a3b8; margin-bottom: 10px; font-size: 0.78rem; }
+    input[type=file], select, input[type=number], input[type=text] {
+      width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #334155;
+      background: #0f172a; color: #f1f5f9; font-size: 0.88rem;
+    }
+    button {
+      padding: 10px 16px; font-size: 0.88rem; font-weight: 700;
+      background: linear-gradient(135deg, #f97316, #ea580c); color: white;
+      border: none; border-radius: 9px; cursor: pointer; margin-top: 8px; margin-right: 6px;
+    }
+    button.secondary { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; }
+    button.small { padding: 5px 10px; font-size: 0.78rem; margin-top: 0; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .err { color: #f87171; margin-top: 10px; white-space: pre-wrap; font-size: 0.85rem; }
+    .ok { color: #4ade80; margin-top: 10px; font-size: 0.85rem; }
+    .row { display: flex; gap: 14px; flex-wrap: wrap; }
+    .row > * { flex: 1; min-width: 220px; }
+
+    .editor-layout { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
+    @media (max-width: 900px) { .editor-layout { grid-template-columns: 1fr; } }
+    .stage-wrap {
+      background: #0b1020; border-radius: 12px; border: 1px solid #1e293b;
+      aspect-ratio: 4/5; overflow: hidden; position: relative;
+    }
+    .stage-wrap svg { width: 100%; height: 100%; touch-action: none; }
+    .part-outline { fill: none; stroke: #f97316; stroke-width: 4; opacity: 0; pointer-events: none; }
+    .sidebar { display: flex; flex-direction: column; gap: 12px; max-height: 700px; overflow-y: auto; }
+    .part-list { list-style: none; margin: 0; padding: 0; font-size: 0.82rem; }
+    .part-list li {
+      padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex;
+      justify-content: space-between; align-items: center; gap: 6px;
+    }
+    .part-list li:hover { background: rgba(255,255,255,0.06); }
+    .part-list li.selected { background: rgba(249,115,22,0.25); }
+    .part-list .pname { font-weight: 600; }
+    .part-list .pparent { color: #64748b; font-size: 0.72rem; }
+    .selected-panel { border-top: 1px solid #334155; padding-top: 10px; font-size: 0.82rem; }
+    .kf-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .kf-chip {
+      background: #1e293b; border: 1px solid #334155; border-radius: 6px;
+      padding: 4px 8px; font-size: 0.75rem; cursor: pointer;
+    }
+    .kf-chip.active { background: #f97316; border-color: #f97316; color: #1e293b; }
+    .hint { color: #64748b; font-size: 0.76rem; line-height: 1.4; }
+    .tabbar { display: flex; gap: 6px; margin-bottom: 12px; }
+    .tabbar button { margin: 0; }
+    .tabbar button.inactive { background: #1e293b; border: 1px solid #334155; color: #94a3b8; }
+    .missing-tag { color: #fbbf24; font-size: 0.72rem; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🦴 Rig Animation Editor</h1>
+  <p class="sub">Kisi bhi real character file (.fla ya .ana.zip) ke real parts nikaal ke manually pose/animate karo — parts ka real hierarchy (agar file mein bone data hai) automatically aata hai, warna khud assign karo. Animation ko JSON mein save karke kisi doosre character pe try karo. <a href="fla.html">← FLA Browser</a></p>
+
+  <div class="card" id="uploadCard">
+    <h2>1. Character upload karo</h2>
+    <input type="file" id="rigFile" accept=".fla,.zip" />
+    <button id="rigUploadBtn">Upload aur Scan Karo</button>
+    <div id="uploadStatus"></div>
+    <div id="uploadErr" class="err"></div>
+
+    <div id="symbolPickWrap" style="display:none; margin-top:14px;">
+      <label>Character symbol chuno</label>
+      <select id="symbolPick"></select>
+      <button id="loadRigBtn">Rig Load Karo</button>
+      <div id="rigErr" class="err"></div>
+    </div>
+  </div>
+
+  <div class="card" id="editorCard" style="display:none;">
+    <div class="tabbar">
+      <button id="tabPose">Pose &amp; Animate</button>
+      <button id="tabRetarget" class="inactive">Doosre Character pe Try Karo</button>
+    </div>
+
+    <div id="poseTab">
+      <div class="editor-layout">
+        <div class="stage-wrap">
+          <svg id="stageSvg" viewBox="-200 -200 1800 2200"></svg>
+        </div>
+        <div class="sidebar">
+          <div>
+            <h2 style="margin-bottom:4px;">Parts</h2>
+            <p class="hint">Part pe click karke select karo, phir stage pe drag karke move karo. Neeche rotation slider se ghumao.</p>
+            <ul class="part-list" id="partList"></ul>
+          </div>
+          <div class="selected-panel" id="selectedPanel" style="display:none;">
+            <div id="selName" style="font-weight:700; margin-bottom:6px;"></div>
+            <label>Parent</label>
+            <select id="parentPick"></select>
+            <label style="margin-top:8px;">Rotation</label>
+            <input type="range" id="rotSlider" min="-180" max="180" value="0" step="1" />
+            <button class="small secondary" id="resetPoseBtn">Is part ka pose reset karo</button>
+          </div>
+          <div class="selected-panel">
+            <h2 style="margin-bottom:4px;">Timeline</h2>
+            <div class="row" style="gap:8px;">
+              <div style="flex:1;">
+                <label>Frame</label>
+                <input type="number" id="frameNum" value="0" min="0" />
+              </div>
+              <div style="flex:1; display:flex; align-items:flex-end;">
+                <button class="small" id="recordBtn" style="width:100%;">Keyframe Record</button>
+              </div>
+            </div>
+            <div class="kf-list" id="kfList"></div>
+            <div style="margin-top:10px;">
+              <button class="small secondary" id="playBtn">▶ Play</button>
+              <button class="small secondary" id="stopBtn" style="display:none;">■ Stop</button>
+              <button class="small secondary" id="exportBtn">⬇ JSON Export</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="retargetTab" style="display:none;">
+      <div class="row">
+        <div class="card" style="margin:0;">
+          <h2>Animation JSON</h2>
+          <label>Pehle wali animation ka JSON load karo</label>
+          <input type="file" id="animJsonFile" accept=".json" />
+          <small>Ya abhi jo record kiya hai wahi use ho jayega (kuch upload mat karo).</small>
+        </div>
+        <div class="card" style="margin:0;">
+          <h2>Naya Character</h2>
+          <input type="file" id="targetFile" accept=".fla,.zip" />
+          <button id="targetUploadBtn">Upload Karo</button>
+          <div id="targetSymbolPickWrap" style="display:none; margin-top:10px;">
+            <select id="targetSymbolPick"></select>
+            <button id="loadTargetRigBtn">Rig Load Karo</button>
+          </div>
+          <div id="targetErr" class="err"></div>
+        </div>
+      </div>
+      <div class="card" id="retargetStageCard" style="display:none;">
+        <h2>Preview</h2>
+        <div id="missingParts" class="missing-tag"></div>
+        <div class="stage-wrap" style="max-width:500px;">
+          <svg id="retargetSvg" viewBox="-200 -200 1800 2200"></svg>
+        </div>
+        <button class="small secondary" id="retargetPlayBtn">▶ Play</button>
+        <button class="small secondary" id="retargetStopBtn" style="display:none;">■ Stop</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="rig_editor.js"></script>
+</body>
+</html>
