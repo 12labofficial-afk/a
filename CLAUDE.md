@@ -97,6 +97,32 @@ inherited `loop`/`firstFrame` attributes, wrapping in a single loop
 symbol) were tried and directly measured to NOT help; the split-render
 approach is the one that's actually proven fast.
 
+## Real bone/IK animations (list_scene_timelines, has_ik_bones)
+
+Adobe's real Bone Tool data does NOT use a `<DOMArmature>` tag in modern
+exports (an earlier wrong assumption) -- it's `<DOMLayer animationType="IK
+pose">` containing `<DOMFrame tweenType="IK pose" isIKPose="true"
+poseLocations="...">` with a real `<IKTree>`/`<IKNode>`/`boneName=` bone
+hierarchy. `grep -ril "IKTree\|animationType=\"IK pose\""` finds it;
+`DOMArmature` does not. Every symbol/scene analysis now sets
+`has_ik_bones` -- check that field, don't grep for the wrong tag again.
+
+Real bone-rigged animations can live in TWO different places, and both
+must be checked -- an earlier turn wrongly told the user a file had no
+walk cycle because it only checked LIBRARY symbols:
+- Inside a LIBRARY symbol (`_analyze_symbol_file` catches this normally).
+- Directly on the Stage/Scene timeline (`DOMDocument.xml`'s own
+  `<DOMTimeline>`, e.g. "Scene 1") -- INVISIBLE to any LIBRARY-only scan.
+  `list_scene_timelines()` finds these and `list_animated_symbols()`
+  includes them automatically now, as `"Scene/<name>"` entries.
+  `render_preview()` renders a `"Scene/<name>"` path via xfl2svg's own
+  `--timeline-type scene` instead of treating it as a library symbol.
+xfl2svg renders real IK-pose animation correctly (confirmed: two separate
+files, both a clean real walk cycle, rendered with no crash beyond the
+usual gradient/mask warnings) -- so once found, it's just as renderable
+as any other real animation, nothing special needed beyond `--timeline-type
+scene`.
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes
