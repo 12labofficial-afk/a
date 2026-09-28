@@ -32,11 +32,42 @@ def _local(tag):
     return tag.split("}")[-1] if "}" in tag else tag
 
 
+def _unwrap_asset_bundle(fla_path):
+    """Some real uploads are an Adobe "Asset" export bundle (.ana.zip or
+    similar) rather than a raw .fla -- a zip holding the real .fla ALONGSIDE
+    a compiled .swf, preview PNGs, and manifest.json (its own
+    `autoKeywords`/`keywords` can be a real, useful hint -- e.g. "Armature",
+    "Bones aur Motion" -- for whether the real file inside has bone data,
+    seen in the wild on a genuinely bone-rigged character). If `fla_path`'s
+    zip has no LIBRARY/ or DOMDocument.xml at its root but does contain
+    exactly one top-level *.fla entry, extract THAT nested .fla to a temp
+    file and return its path; otherwise return `fla_path` unchanged."""
+    try:
+        result = subprocess.run(["unzip", "-l", fla_path], capture_output=True, text=True)
+        listing = result.stdout
+    except OSError:
+        return fla_path
+    # unzip -l's Name column can contain spaces (real filenames often do),
+    # so a naive last-whitespace-token split truncates them -- match
+    # everything after the fixed Length/Date/Time columns instead.
+    names = re.findall(r'^\s*\d+\s+[\d-]+\s+[\d:]+\s+(.+?)\s*$', listing, re.M)
+    if any(n in ("DOMDocument.xml",) or n.startswith("LIBRARY/") for n in names):
+        return fla_path
+    fla_entries = [n for n in names if n.lower().endswith(".fla") and "/" not in n]
+    if len(fla_entries) != 1:
+        return fla_path
+    work = tempfile.mkdtemp(prefix="flabundle_")
+    subprocess.run(["unzip", "-o", "-q", fla_path, fla_entries[0], "-d", work], capture_output=True)
+    inner_path = os.path.join(work, fla_entries[0])
+    return inner_path if os.path.exists(inner_path) else fla_path
+
+
 def repair_and_extract(fla_path, extract_dir):
     """XFL .fla files are zips and real-world exports are sometimes slightly
     truncated/corrupted. Try a plain unzip first; if that doesn't yield a
     proper XFL project, repair with `zip -FF` (same trick that fixed the
     Shikari file) and unzip the repaired copy."""
+    fla_path = _unwrap_asset_bundle(fla_path)
     os.makedirs(extract_dir, exist_ok=True)
     subprocess.run(["unzip", "-o", "-q", fla_path, "-d", extract_dir], capture_output=True)
 
