@@ -1431,6 +1431,29 @@ def _ik_hierarchy(frame_element):
     return parents
 
 
+def _mat_compose(p, c):
+    """Standard 2D affine composition: apply `c` first, then `p` -- i.e. the
+    result is `c` expressed in whatever space `p` maps into."""
+    pa, pb, pc, pd, ptx, pty = p
+    ca, cb, cc, cd, ctx, cty = c
+    return (
+        pa * ca + pc * cb, pb * ca + pd * cb,
+        pa * cc + pc * cd, pb * cc + pd * cd,
+        pa * ctx + pc * cty + ptx, pb * ctx + pd * cty + pty,
+    )
+
+
+def _mat_inverse(m):
+    a, b, c, d, tx, ty = m
+    det = a * d - b * c
+    if abs(det) < 1e-12:
+        return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    ia, ib, ic, id_ = d / det, -b / det, -c / det, a / det
+    itx = (c * ty - d * tx) / det
+    ity = (b * tx - a * ty) / det
+    return (ia, ib, ic, id_, itx, ity)
+
+
 def extract_character_parts(extract_dir, target_symbol):
     """Real per-part rig data for `target_symbol`, meant for a manual posing/
     animation tool: for every layer, the REAL symbol it places, its REAL
@@ -1492,5 +1515,24 @@ def extract_character_parts(extract_dir, target_symbol):
     else:
         for part in parts:
             part.pop("ik_name", None)
+
+    # The real matrix on each part is ABSOLUTE (placement straight in
+    # target_symbol's own space), not relative to its parent part -- but a
+    # posing editor wants to nest each part inside its parent's on-screen
+    # group (so dragging a parent naturally carries its children with it),
+    # which only works if the CHILD's matrix is expressed in the PARENT's
+    # local space. Convert once here: local = inverse(parent_absolute) .
+    # child_absolute, so composing them back (parent_absolute . local)
+    # exactly reproduces the original real, authored placement -- this is
+    # a coordinate-space change, not new data.
+    by_name = {p["name"]: p for p in parts}
+    for part in parts:
+        part["absolute_matrix"] = list(part["matrix"])
+    for part in parts:
+        parent = by_name.get(part["parent"]) if part["parent"] else None
+        if parent is None:
+            continue
+        local = _mat_compose(_mat_inverse(tuple(parent["absolute_matrix"])), tuple(part["absolute_matrix"]))
+        part["matrix"] = list(local)
 
     return dict(parts=parts, fps=doc_frame_rate(extract_dir))
