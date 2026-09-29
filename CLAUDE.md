@@ -250,6 +250,33 @@ Real, reproducible bugs hit while building this -- don't reintroduce any:
    moment. Fixed by making the container visible BEFORE building/measuring
    the stage, not after.
 
+### Real .ana export (not just .fla), and export must not hide behind a mode
+
+Two real complaints: the export panel lived inside the Move-mode-only
+section, so it was invisible whenever the user was in Animation mode --
+easy to miss and easy to conclude "there's no export at all". And the
+tool only ever exported a plain `.fla`, never a real `.ana` bundle, when
+the original upload WAS one.
+
+Fixed both: the "Rig Export" panel is now a normal, always-visible part
+of the sidebar (not gated by `editMode` at all) -- exporting the current
+corrected rig should never depend on which posing mode happens to be
+selected. And `XflProject` now also keeps the ORIGINAL outer bundle zip
+(`bundleOuterZip`) and the inner `.fla`'s own entry name
+(`bundleInnerEntryName`) whenever `loadProjectFromZipBytes` had to unwrap
+an `.ana.zip` bundle to find the real XFL underneath -- previously that
+outer zip was simply discarded once unwrapped. `exportCorrectedAna`
+reuses the exact same matrix-correction step as `exportCorrectedFla`
+(factored out into `_writeCorrectedMatricesIntoZipObj`, shared by both),
+then replaces ONLY the inner `.fla` entry inside that retained OUTER zip
+-- the swf/preview-PNGs/manifest.json are carried over completely
+unchanged, since nothing in this tool ever reads or needs to regenerate
+them. Verified with a full round-trip: export a `.ana`, reload that exact
+blob as a fresh project, confirm it's still detected as a bundle, and
+confirm the corrected rig re-extracts correctly. The `.ana` button is
+disabled (with an explanatory note) when the original upload was a plain
+`.fla` with no outer bundle to write back into.
+
 ### Real bug: rotation ran backwards once the user actually zoomed in
 
 Reported as "jab mai ghumata hu toh ulta ho jata hai" (rotating does the

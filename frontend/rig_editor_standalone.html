@@ -193,10 +193,14 @@
             <div class="lock-note" id="lockNote" style="display:none;">Is bone ka rotation asli rig mein disabled hai (rotationEnabled="false") -- slider phir bhi kaam karega, par original file isko rotate nahi karti thi.</div>
             <button class="small secondary" id="resetPoseBtn">Is part ka pose reset karo</button>
           </div>
-          <div class="selected-panel" id="moveModePanel" style="display:none;">
-            <h2 style="margin-bottom:4px;">Rig Calibration</h2>
-            <p class="hint">Jab parts sahi se bones pe attach ho jayein, ye corrected rig ek nayi .fla file mein save kar lo -- usi ko baad mein dubara upload kar sakte ho.</p>
-            <button class="small" id="exportFlaBtn" style="width:100%;">&#11015; Corrected .fla Export</button>
+          <div class="selected-panel">
+            <h2 style="margin-bottom:4px;">Rig Export</h2>
+            <p class="hint">"Move Parts" mode mein parts ko bones pe sahi se attach karne ke baad (ya kabhi bhi), current corrected rig ko real file mein wapas save kar lo -- usi ko baad mein dubara upload kar sakte ho.</p>
+            <div class="row" style="gap:8px;">
+              <button class="small" id="exportFlaBtn" style="flex:1;">&#11015; .fla Export</button>
+              <button class="small" id="exportAnaBtn" style="flex:1;">&#11015; .ana Export</button>
+            </div>
+            <div class="hint" id="exportAnaNote" style="display:none; margin-top:4px;">.ana export sirf tab milta hai jab original upload ek .ana bundle ho (seedhi .fla upload ke liye sirf .fla export use karo).</div>
           </div>
           <div class="selected-panel">
             <h2 style="margin-bottom:4px;">Timeline</h2>
@@ -754,10 +758,18 @@ function colorEffectToFilter(ce) {
 // ---------------------------------------------------------------------------
 
 class XflProject {
-  constructor(zip, docXml, zipObj) {
+  constructor(zip, docXml, zipObj, bundleInfo) {
     this.zip = zip; // Map<path, string content> (XML text cache)
     this.doc = docXml; // parsed DOMDocument.xml
-    this.zipObj = zipObj || null; // raw JSZip instance (the real, un-unwrapped .fla zip) -- kept so a corrected rig can be written back into an actual re-importable .fla, touching only the one symbol file that changed
+    this.zipObj = zipObj || null; // raw JSZip instance of the real .fla itself -- kept so a corrected rig can be written back into an actual re-importable .fla, touching only the one symbol file that changed
+    // If the original upload was an Adobe Asset bundle (.ana.zip: the real
+    // .fla alongside a .swf, preview PNGs and manifest.json -- see
+    // fla_inspector.py's _unwrap_asset_bundle), these let a corrected rig
+    // be written back into a full, real .ana too -- replacing ONLY the
+    // inner .fla entry, leaving the swf/previews/manifest untouched
+    // (nothing else in this tool ever reads or needs to regenerate them).
+    this.bundleOuterZip = (bundleInfo && bundleInfo.outerZip) || null;
+    this.bundleInnerEntryName = (bundleInfo && bundleInfo.innerEntryName) || null;
     this.symbolPaths = new Map(); // name -> library-relative path (no .xml)
     this.symbolCache = new Map(); // name -> parsed XML document
     this.timelineCache = new Map();
@@ -859,11 +871,13 @@ async function loadProjectFromZipBytes(buffer) {
   const names = Object.keys(zip.files);
   const hasLibrary = names.some((n) => n === "DOMDocument.xml" || n.startsWith("LIBRARY/"));
   let realZip = zip;
+  let bundleInfo = null;
   if (!hasLibrary) {
     const flaEntries = names.filter((n) => n.toLowerCase().endsWith(".fla") && !n.includes("/"));
     if (flaEntries.length === 1) {
       const innerBuf = await zip.file(flaEntries[0]).async("arraybuffer");
       realZip = await loadZipLenient(innerBuf);
+      bundleInfo = { outerZip: zip, innerEntryName: flaEntries[0] };
     } else {
       throw new Error("Is bundle ke andar koi valid .fla (XFL) nahi mila.");
     }
@@ -875,7 +889,7 @@ async function loadProjectFromZipBytes(buffer) {
     throw new Error("Ye ek valid .fla (XFL / uncompressed Animate format) nahi lag rahi -- DOMDocument.xml nahi mila.");
   }
   const docXml = new DOMParser().parseFromString(zipMap.get("DOMDocument.xml"), "application/xml");
-  return new XflProject(zipMap, docXml, realZip);
+  return new XflProject(zipMap, docXml, realZip, bundleInfo);
 }
 
 function listCharacterCandidates(project) {
@@ -1243,7 +1257,7 @@ function extractCharacterParts(project, targetSymbol) {
 // (matched by their own real `name` attribute, the same `_ikName` used to
 // build the rig in the first place); every other file in the project is
 // carried over completely unchanged.
-async function exportCorrectedFla(project, targetSymbol, parts) {
+function _writeCorrectedMatricesIntoZipObj(project, targetSymbol, parts) {
   if (!project.zipObj) throw new Error("Original zip data uplabdh nahi hai -- dubara file upload karo.");
   const relPath = project.symbolPaths.get(targetSymbol);
   if (!relPath) throw new Error(`Symbol '${targetSymbol}' ka file path nahi mila.`);
@@ -1285,7 +1299,33 @@ async function exportCorrectedFla(project, targetSymbol, parts) {
 
   const newXmlText = new XMLSerializer().serializeToString(doc);
   project.zipObj.file(file, newXmlText);
+}
+
+// Writes a calibrated rig's corrected REST matrices back into the real
+// XFL XML they came from, and re-zips it as a real, re-uploadable .fla --
+// only the exact <DOMSymbolInstance>s this rig touched are changed
+// (matched by their own real `name` attribute, the same `_ikName` used to
+// build the rig in the first place); every other file in the project is
+// carried over completely unchanged.
+async function exportCorrectedFla(project, targetSymbol, parts) {
+  _writeCorrectedMatricesIntoZipObj(project, targetSymbol, parts);
   return project.zipObj.generateAsync({ type: "blob" });
+}
+
+// Same correction, but written back into a full Adobe Asset bundle
+// (.ana.zip: the real .fla alongside a .swf, preview PNGs and
+// manifest.json) when that's what was originally uploaded -- only the
+// inner .fla entry is replaced; the swf/previews/manifest are carried
+// over completely unchanged (this tool never reads or regenerates them,
+// and nothing else in the bundle depends on the rig's matrices).
+async function exportCorrectedAna(project, targetSymbol, parts) {
+  if (!project.bundleOuterZip) {
+    throw new Error("Ye character seedhe .fla se upload hua tha (.ana bundle se nahi) -- iske liye koi original .ana nahi hai wapas likhne ko. '.fla Export' use karo.");
+  }
+  _writeCorrectedMatricesIntoZipObj(project, targetSymbol, parts);
+  const correctedFlaBuf = await project.zipObj.generateAsync({ type: "arraybuffer" });
+  project.bundleOuterZip.file(project.bundleInnerEntryName, correctedFlaBuf);
+  return project.bundleOuterZip.generateAsync({ type: "blob" });
 }
 
 function analyzeTimelineLayers(layers) {
@@ -1990,6 +2030,9 @@ $("loadRigBtn").addEventListener("click", () => {
     renderKfList();
     updateUndoRedoButtons();
     $("selectedPanel").style.display = "none";
+    const hasBundle = !!mainProject.bundleOuterZip;
+    $("exportAnaBtn").disabled = !hasBundle;
+    $("exportAnaNote").style.display = hasBundle ? "none" : "block";
   } catch (e) {
     $("rigErr").textContent = e.message;
     console.error(e);
@@ -2215,14 +2258,13 @@ $("zoomFitBtn").addEventListener("click", () => mainView && mainView.resetZoom()
 
 const DRAG_HINT = {
   animate: "Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Poore character ko move karne ke liye root part (jiska koi parent na ho) ko drag karo.",
-  move: "RIG CALIBRATION MODE: ab drag se part FREELY move hota hai (uska apna joint bhi shift hota hai) -- isse part ko uske real bone pe sahi jagah pe attach karo. Jab sahi lage, 'Corrected .fla Export' se save kar lo.",
+  move: "RIG CALIBRATION MODE: ab drag se part FREELY move hota hai (uska apna joint bhi shift hota hai) -- isse part ko uske real bone pe sahi jagah pe attach karo. Jab sahi lage, neeche 'Rig Export' se save kar lo.",
 };
 document.querySelectorAll('#modeToggle input[name="editMode"]').forEach((radio) => {
   radio.addEventListener("change", () => {
     const mode = radio.value;
     document.querySelectorAll(".mode-opt").forEach((el) => el.classList.toggle("active", el.dataset.mode === mode));
     $("dragHint").textContent = DRAG_HINT[mode];
-    $("moveModePanel").style.display = mode === "move" ? "block" : "none";
     if (mainView) mainView.setMode(mode);
   });
 });
@@ -2247,27 +2289,34 @@ $("loadAnimJsonFile").addEventListener("change", async () => {
   }
 });
 
-$("exportFlaBtn").addEventListener("click", async () => {
-  $("exportFlaBtn").disabled = true;
-  $("exportFlaBtn").textContent = "Bana raha hoon...";
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function runExport(btn, label, exportFn, filenameSuffix) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Bana raha hoon...";
   try {
-    const blob = await exportCorrectedFla(mainProject, mainView.rig.symbol, mainView.rig.parts);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${mainView.rig.symbol.replace(/[^A-Za-z0-9_-]/g, "_")}_corrected.fla`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    const blob = await exportFn(mainProject, mainView.rig.symbol, mainView.rig.parts);
+    downloadBlob(blob, `${mainView.rig.symbol.replace(/[^A-Za-z0-9_-]/g, "_")}_corrected${filenameSuffix}`);
   } catch (e) {
     alert("Export fail ho gaya: " + e.message);
     console.error(e);
   } finally {
-    $("exportFlaBtn").disabled = false;
-    $("exportFlaBtn").textContent = "⬇ Corrected .fla Export";
+    btn.disabled = false;
+    btn.textContent = original;
   }
-});
+}
+$("exportFlaBtn").addEventListener("click", () => runExport($("exportFlaBtn"), "fla", exportCorrectedFla, ".fla"));
+$("exportAnaBtn").addEventListener("click", () => runExport($("exportAnaBtn"), "ana", exportCorrectedAna, ".ana.zip"));
 
 // ---- tabs ----
 $("tabPose").addEventListener("click", () => {
