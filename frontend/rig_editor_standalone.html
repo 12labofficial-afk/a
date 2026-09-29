@@ -67,6 +67,9 @@
   .mode-opt span { display: flex; flex-direction: column; gap: 2px; }
   .mode-opt strong { font-size: 0.86rem; }
   .mode-opt small { color: #94a3b8; font-size: 0.74rem; margin: 0; }
+  .stage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .zoom-controls { display: flex; gap: 6px; flex-wrap: wrap; }
+  .zoom-controls button { min-width: 44px; min-height: 40px; }
   .sidebar { display: flex; flex-direction: column; gap: 12px; max-height: 78vh; overflow-y: auto; }
   .part-list { list-style: none; margin: 0; padding: 0; font-size: 0.82rem; }
   .part-list li {
@@ -131,7 +134,17 @@
       </div>
       <div class="editor-layout">
         <div>
-          <label class="bones-toggle"><input type="checkbox" id="showBonesChk" checked /> Bones dikhao (real joints + connections)</label>
+          <div class="stage-toolbar">
+            <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="showBonesChk" checked /> Bones dikhao</label>
+            <div class="zoom-controls">
+              <button class="small secondary" id="undoBtn" title="Undo" disabled>&#8630; Undo</button>
+              <button class="small secondary" id="redoBtn" title="Redo" disabled>&#8631; Redo</button>
+              <button class="small secondary" id="zoomOutBtn" title="Zoom out">&minus;</button>
+              <button class="small secondary" id="zoomFitBtn" title="Fit to view">Fit</button>
+              <button class="small secondary" id="zoomInBtn" title="Zoom in">+</button>
+            </div>
+          </div>
+          <p class="hint">Mobile pe do ungliyon se pinch karke zoom karo, ek ungli se khaali jagah pe drag karke pan karo -- chhote parts ko sahi se pakadne ke liye zoom in karo.</p>
           <div class="stage-wrap">
             <svg id="stageSvg" viewBox="-300 -900 700 1100" preserveAspectRatio="xMidYMid meet"></svg>
           </div>
@@ -1307,6 +1320,21 @@ class RigView {
     // rig itself, so it must persist as the new baseline, not just a
     // transient pose value.
     this.editMode = "animate";
+    // Pan/zoom is a pure DISPLAY convenience (a wrapper <g> around all
+    // rendered content, transformed on top of the fixed, fitted viewBox)
+    // -- svgPoint() below intentionally keeps mapping screen -> the fixed
+    // viewBox space regardless of this, since that's the same space
+    // pose/worldMatrix already operate in. Dragging math is therefore
+    // completely unaffected by how far the user has zoomed/panned in.
+    this.zoom = { scale: 1, tx: 0, ty: 0 };
+    this._bgPointers = new Map();
+    this._wireZoomPan();
+    // Undo/redo: a full snapshot of everything an edit can touch (base
+    // matrices, hierarchy, live pose, keyframes) pushed BEFORE each
+    // mutating user action, so undo/redo never has to guess what changed.
+    this.undoStack = [];
+    this.redoStack = [];
+    this.onHistoryChange = null;
   }
 
   setMode(mode) { this.editMode = mode; }
@@ -1314,6 +1342,131 @@ class RigView {
   _commitBase(name) {
     const part = this.rig.parts.find((p) => p.name === name);
     part.matrix = this.pose[name].slice();
+  }
+
+  // ---- undo/redo ----
+  snapshot() {
+    return {
+      parts: this.rig.parts.map((p) => ({ name: p.name, parent: p.parent, matrix: p.matrix.slice() })),
+      pose: JSON.parse(JSON.stringify(this.pose)),
+      keyframes: JSON.parse(JSON.stringify(this.keyframes)),
+    };
+  }
+  restoreSnapshot(snap) {
+    for (const sp of snap.parts) {
+      const part = this.rig.parts.find((p) => p.name === sp.name);
+      if (part) { part.parent = sp.parent; part.matrix = sp.matrix.slice(); }
+    }
+    this.pose = JSON.parse(JSON.stringify(snap.pose));
+    this.keyframes = JSON.parse(JSON.stringify(snap.keyframes));
+    this.updateTransforms();
+  }
+  pushHistory() {
+    this.undoStack.push(this.snapshot());
+    if (this.undoStack.length > 60) this.undoStack.shift();
+    this.redoStack = [];
+    if (this.onHistoryChange) this.onHistoryChange();
+  }
+  canUndo() { return this.undoStack.length > 0; }
+  canRedo() { return this.redoStack.length > 0; }
+  undo() {
+    if (!this.undoStack.length) return;
+    this.redoStack.push(this.snapshot());
+    this.restoreSnapshot(this.undoStack.pop());
+    if (this.onHistoryChange) this.onHistoryChange();
+  }
+  redo() {
+    if (!this.redoStack.length) return;
+    this.undoStack.push(this.snapshot());
+    this.restoreSnapshot(this.redoStack.pop());
+    if (this.onHistoryChange) this.onHistoryChange();
+  }
+
+  // ---- pan/zoom (screen convenience only -- see note in the constructor) ----
+  _applyZoom() {
+    if (this.viewGroup) this.viewGroup.setAttribute("transform", `matrix(${this.zoom.scale},0,0,${this.zoom.scale},${this.zoom.tx},${this.zoom.ty})`);
+  }
+  resetZoom() { this.zoom = { scale: 1, tx: 0, ty: 0 }; this._applyZoom(); }
+  zoomAroundClientPoint(factor, clientX, clientY) {
+    const midRoot = this.svgPoint({ clientX, clientY });
+    const inv = matInverse([this.zoom.scale, 0, 0, this.zoom.scale, this.zoom.tx, this.zoom.ty]);
+    const localPoint = applyMatToPoint(inv, midRoot);
+    const newScale = Math.min(8, Math.max(0.2, this.zoom.scale * factor));
+    this.zoom.scale = newScale;
+    this.zoom.tx = midRoot.x - newScale * localPoint.x;
+    this.zoom.ty = midRoot.y - newScale * localPoint.y;
+    this._applyZoom();
+  }
+  zoomAroundCenter(factor) {
+    const rect = this.svgEl.getBoundingClientRect();
+    this.zoomAroundClientPoint(factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }
+
+  _wireZoomPan() {
+    const pointers = this._bgPointers;
+    const onDown = (evt) => {
+      pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+      // Capture is a best-effort reliability aid (keeps getting move events
+      // even if the finger slides outside the element); it can legitimately
+      // fail (e.g. a second simultaneous pointer in some browsers) and must
+      // never abort the rest of this handler, or a second pinch finger would
+      // silently never start the pinch at all.
+      try { this.svgEl.setPointerCapture(evt.pointerId); } catch (e) { /* ignore */ }
+      if (pointers.size === 1) {
+        this._panRootStart = this.svgPoint(evt);
+      } else if (pointers.size === 2) {
+        this._beginPinch();
+      }
+    };
+    const onMove = (evt) => {
+      if (!pointers.has(evt.pointerId)) return;
+      pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+      if (pointers.size === 1) {
+        const curRoot = this.svgPoint(evt);
+        this.zoom.tx += curRoot.x - this._panRootStart.x;
+        this.zoom.ty += curRoot.y - this._panRootStart.y;
+        this._panRootStart = curRoot;
+        this._applyZoom();
+      } else if (pointers.size >= 2) {
+        this._updatePinch();
+      }
+    };
+    const onUp = (evt) => {
+      pointers.delete(evt.pointerId);
+      if (pointers.size === 1) {
+        const remaining = Array.from(pointers.values())[0];
+        this._panRootStart = this.svgPoint({ clientX: remaining.x, clientY: remaining.y });
+      }
+    };
+    // A part's own pointerdown handler calls stopPropagation(), so these
+    // only ever fire for genuine background hits -- no conflict with
+    // per-part drag/rotate handling.
+    this.svgEl.addEventListener("pointerdown", onDown);
+    this.svgEl.addEventListener("pointermove", onMove);
+    this.svgEl.addEventListener("pointerup", onUp);
+    this.svgEl.addEventListener("pointercancel", onUp);
+  }
+
+  _beginPinch() {
+    const pts = Array.from(this._bgPointers.values());
+    const [p1, p2] = pts;
+    const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+    const midRoot = this.svgPoint({ clientX: (p1.x + p2.x) / 2, clientY: (p1.y + p2.y) / 2 });
+    const inv = matInverse([this.zoom.scale, 0, 0, this.zoom.scale, this.zoom.tx, this.zoom.ty]);
+    this._pinchAnchor = { startDist: dist, localPoint: applyMatToPoint(inv, midRoot), scaleAtStart: this.zoom.scale };
+  }
+  _updatePinch() {
+    const pts = Array.from(this._bgPointers.values());
+    if (pts.length < 2 || !this._pinchAnchor) return;
+    const [p1, p2] = pts;
+    const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+    const midRoot = this.svgPoint({ clientX: (p1.x + p2.x) / 2, clientY: (p1.y + p2.y) / 2 });
+    const { startDist, localPoint, scaleAtStart } = this._pinchAnchor;
+    const newScale = Math.min(8, Math.max(0.2, scaleAtStart * (dist / startDist)));
+    this.zoom.scale = newScale;
+    this.zoom.tx = midRoot.x - newScale * localPoint.x;
+    this.zoom.ty = midRoot.y - newScale * localPoint.y;
+    this._applyZoom();
   }
 
   load(project, symbol, parts, fps) {
@@ -1348,9 +1501,15 @@ class RigView {
     this.outlineRects = {};
     this.jointDots = {};
     this.boneLines = {};
+    this._cachedDotR = null;
+    this.zoom = { scale: 1, tx: 0, ty: 0 };
     const defsEl = document.createElementNS(SVG_NS, "defs");
     this.svgEl.appendChild(defsEl);
     for (const part of this.rig.parts) defsEl.append(...part.svgDefs);
+
+    this.viewGroup = document.createElementNS(SVG_NS, "g");
+    this.viewGroup.setAttribute("class", "view-transform");
+    this.svgEl.appendChild(this.viewGroup);
 
     const byPaintOrder = this.rig.parts.slice().sort((a, b) => a.paintOrder - b.paintOrder);
     for (const part of byPaintOrder) {
@@ -1377,7 +1536,7 @@ class RigView {
       this.outlineRects[part.name] = outline;
 
       this.partGroups[part.name] = poseGroup;
-      this.svgEl.appendChild(poseGroup);
+      this.viewGroup.appendChild(poseGroup);
     }
 
     // Bone overlay (joints + connecting lines) always renders on top of
@@ -1397,11 +1556,12 @@ class RigView {
       boneLayer.appendChild(dot);
       this.jointDots[part.name] = dot;
     }
-    this.svgEl.appendChild(boneLayer);
+    this.viewGroup.appendChild(boneLayer);
 
     this._wireDrag();
     this.updateTransforms();
     this._fitViewBox();
+    this._applyZoom();
   }
 
   setShowBones(on) { this.svgEl.classList.toggle("hide-bones", !on); }
@@ -1494,6 +1654,7 @@ class RigView {
     const targetEl = evt.currentTarget;
     const name = targetEl.getAttribute("data-part");
     this.selectPart(name);
+    this.pushHistory();
     const part = this.rig.parts.find((p) => p.name === name);
     const parentWorld = part.parent ? this.worldMatrix(part.parent) : [1, 0, 0, 1, 0, 0];
     const parentInv = matInverse(parentWorld);
@@ -1517,7 +1678,7 @@ class RigView {
     const startAngle = Math.atan2(startLocalPoint.y - startLocal[5], startLocalPoint.x - startLocal[4]);
     const startRotationDeg = matDecomposeRotation(startLocal);
     this.dragState = { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg };
-    targetEl.setPointerCapture(evt.pointerId);
+    try { targetEl.setPointerCapture(evt.pointerId); } catch (e) { /* best-effort only, see _wireZoomPan's note */ }
     const move = (e) => this._onPointerMove(e);
     const up = () => {
       this.dragState = null;
@@ -1550,12 +1711,14 @@ class RigView {
   }
 
   resetPart(name) {
+    this.pushHistory();
     const part = this.rig.parts.find((p) => p.name === name);
     this.pose[name] = part.matrix.slice();
     this.updateTransforms();
   }
 
   reparent(name, newParent) {
+    this.pushHistory();
     const world = this.worldMatrix(name);
     const part = this.rig.parts.find((p) => p.name === name);
     part.parent = newParent || null;
@@ -1568,6 +1731,7 @@ class RigView {
   }
 
   recordKeyframe(frame) {
+    this.pushHistory();
     const poses = {};
     for (const p of this.rig.parts) poses[p.name] = (this.pose[p.name] || p.matrix).slice();
     const existing = this.keyframes.findIndex((k) => k.frame === frame);
@@ -1607,6 +1771,7 @@ class RigView {
   // between differently-named parts. Returns the list of animation part
   // names that had no match here.
   applyAnimationJson(anim) {
+    this.pushHistory();
     const ourNames = new Set(this.rig.parts.map((p) => p.name));
     const missing = anim.parts.filter((p) => !ourNames.has(p.name)).map((p) => p.name);
     this.keyframes = anim.keyframes.map((kf) => ({
@@ -1679,10 +1844,13 @@ $("loadRigBtn").addEventListener("click", () => {
     mainView.onPoseChange = () => {};
     mainView.load(mainProject, symbol, parts, fps);
     mainView.setShowBones($("showBonesChk").checked);
+    mainView.setMode(document.querySelector('#modeToggle input[name="editMode"]:checked').value);
+    mainView.onHistoryChange = updateUndoRedoButtons;
     currentFrame = 0;
     $("frameNum").value = 0;
     renderPartList();
     renderKfList();
+    updateUndoRedoButtons();
     $("selectedPanel").style.display = "none";
   } catch (e) {
     $("rigErr").textContent = e.message;
@@ -1727,8 +1895,11 @@ $("parentPick").addEventListener("change", () => {
   renderPartList();
   showSelectedPanel(mainView.selectedPart);
 });
+let rotSliderPushed = false;
+$("rotSlider").addEventListener("pointerdown", () => { rotSliderPushed = false; });
 $("rotSlider").addEventListener("input", () => {
   if (!mainView.selectedPart) return;
+  if (!rotSliderPushed) { mainView.pushHistory(); rotSliderPushed = true; }
   const m = mainView.pose[mainView.selectedPart];
   mainView.pose[mainView.selectedPart] = matWithRotation(m, parseFloat($("rotSlider").value));
   mainView.updateTransforms();
@@ -1799,6 +1970,32 @@ $("exportBtn").addEventListener("click", () => {
 $("showBonesChk").addEventListener("change", () => {
   if (mainView) mainView.setShowBones($("showBonesChk").checked);
 });
+
+// ---- undo/redo ----
+function updateUndoRedoButtons() {
+  if (!mainView) return;
+  $("undoBtn").disabled = !mainView.canUndo();
+  $("redoBtn").disabled = !mainView.canRedo();
+}
+function afterHistoryJump() {
+  renderPartList();
+  if (mainView.selectedPart) showSelectedPanel(mainView.selectedPart);
+  renderKfList();
+  updateUndoRedoButtons();
+}
+$("undoBtn").addEventListener("click", () => { if (mainView) { mainView.undo(); afterHistoryJump(); } });
+$("redoBtn").addEventListener("click", () => { if (mainView) { mainView.redo(); afterHistoryJump(); } });
+window.addEventListener("keydown", (evt) => {
+  if (!mainView || !(evt.ctrlKey || evt.metaKey)) return;
+  const key = evt.key.toLowerCase();
+  if (key === "z" && !evt.shiftKey) { evt.preventDefault(); mainView.undo(); afterHistoryJump(); }
+  else if (key === "y" || (key === "z" && evt.shiftKey)) { evt.preventDefault(); mainView.redo(); afterHistoryJump(); }
+});
+
+// ---- zoom (mobile precision: pinch also works directly on the stage) ----
+$("zoomInBtn").addEventListener("click", () => mainView && mainView.zoomAroundCenter(1.4));
+$("zoomOutBtn").addEventListener("click", () => mainView && mainView.zoomAroundCenter(1 / 1.4));
+$("zoomFitBtn").addEventListener("click", () => mainView && mainView.resetZoom());
 
 const DRAG_HINT = {
   animate: "Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Poore character ko move karne ke liye root part (jiska koi parent na ho) ko drag karo.",

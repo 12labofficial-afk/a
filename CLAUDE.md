@@ -250,6 +250,44 @@ Real, reproducible bugs hit while building this -- don't reintroduce any:
    moment. Fixed by making the container visible BEFORE building/measuring
    the stage, not after.
 
+### Pan/zoom and undo/redo (mobile precision + editing safety)
+
+Mobile precision problem: a tiny bone (a finger, an eyebrow) is hard to
+grab accurately on a small touchscreen with no way to zoom in, since
+`touch-action: none` on the stage deliberately disables the browser's own
+pinch/pan (needed so a one-finger drag can pose a part instead of
+scrolling the page). Fixed with the editor's OWN pinch/pan, implemented as
+a single wrapper `<g class="view-transform">` around all rendered content,
+transformed on top of the (otherwise fixed) fitted viewBox -- deliberately
+NOT by rewriting the viewBox itself. This matters: `svgPoint()` (used for
+all drag/pose math) maps screen -> the SVG root's own user space via
+`getScreenCTM()`, which reflects only the fixed viewBox, never a
+descendant group's own transform -- so pan/zoom is provably a pure display
+convenience that cannot perturb pose math, at any zoom level. Pinch-to-
+zoom anchors on the real pinch midpoint (mapped to that same fixed root
+space) so the point under your fingers stays put as you zoom, not the
+character's origin. `+`/`-`/`Fit` buttons give the same control without
+a touchscreen. A real gotcha hit while testing multi-pointer (pinch) input
+programmatically: `setPointerCapture()` can throw for a second
+simultaneous pointer, and an uncaught throw there aborted the rest of that
+pointerdown handler -- so the pinch's second finger never got past
+`onDown` far enough to actually start the pinch. Fixed by wrapping every
+`setPointerCapture()` call in try/catch, since it's a best-effort
+reliability aid (keeps delivering move events if a finger slides off the
+element), never a precondition for the gesture to work at all.
+
+Undo/redo: a full JSON-cloned snapshot (every part's matrix + parent,
+current `pose`, and `keyframes`) is pushed onto `RigView.undoStack` BEFORE
+every mutating action (drag start, a rotation-slider interaction's first
+`input` tick -- not every tick, or one slider drag would fill the stack
+with useless intermediate states --, reparent, reset, keyframe record,
+JSON import). This is deliberately a whole-state snapshot, not a diff or
+an action log: with pose data this small (tens of parts, a handful of
+numbers each), a snapshot is cheap enough that there's no need to
+correctly enumerate every possible mutation's inverse by hand -- and a
+missed inverse would silently corrupt history, while a missed snapshot
+call just means one action isn't undoable, a far safer failure mode.
+
 ### Two edit modes: Animation (rotate-only) vs Move Parts (rig calibration)
 
 The rotate-only drag above is correct for POSING, but sometimes a part's
