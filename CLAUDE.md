@@ -189,6 +189,67 @@ DIFFERENT character's real parts by NAME and reports any that don't match
 (`missingParts`) instead of silently dropping or guessing a substitute --
 never invent a mapping between two characters' differently-named parts.
 
+## Standalone browser-only rig editor (frontend/rig_editor_standalone.html)
+
+A second, fully self-contained edition of the rig editor above -- ONE html
+file (JSZip + a from-scratch XFL-to-SVG renderer + the pose editor UI all
+inlined), zero backend, zero network calls once opened. Built because the
+first edition needs `backend/app/main.py` + `fla_inspector.py` running
+somewhere; this one needs nothing but a browser, including on a phone.
+
+It is NOT a shortcut or a rewrite-from-guesswork -- the renderer is a
+line-for-line JS port of xfl2svg's own modules (`shape/edge.py`,
+`shape/gradient.py`, `shape/style.py`, `shape/shape.py`, `color_effect.py`,
+`svg_renderer.py`), cross-checked against them:
+- `extractCharacterParts`'s output for RAJ BHAI matches
+  `fla_inspector.extract_character_parts`'s output bit-for-bit (same
+  parent-local matrices, e.g. TORSO/HEAF local scale exactly `1.0`, root
+  MIDLE PRT scale `0.39996337890625`).
+- The renderer's frame-0 output for a whole character was compared against
+  `render_preview`'s own proven-correct frame-0 render of the same file --
+  matched closely enough (same pose, proportions, colors) to confirm the
+  port is faithful, not just "looks plausible".
+One deliberate improvement over xfl2svg: RadialGradient IS rendered here
+(xfl2svg has zero support for it -- confirmed by reading its own
+`parse_fill_style()`), as a real SVG `<radialGradient>` built from the
+file's own real gradient stops, not the flatten-to-solid-color workaround
+`_repair_unsupported_radial_gradients` needs for the Python pipeline.
+
+Real, reproducible bugs hit while building this -- don't reintroduce any:
+
+1. **A zip's declared central-directory size can be 54 bytes too high.**
+   Same Animate export quirk `xfl_reader.py`'s `open_fla()` already works
+   around for Python's `zipfile` -- JSZip chokes on it identically. Fixed
+   by reading the raw End-Of-Central-Directory record's `cdir_size` field
+   and patching it back down by 54 when the math (`file_size - cdir_offset
+   - 22`) says that's exactly the discrepancy, before handing the bytes to
+   JSZip -- same math as the Python fix, just applied to raw bytes instead
+   of intercepting `seek()`/`read()`.
+2. **`querySelector('g')` on a whole rendered SVG can silently grab the
+   wrong node.** A `<mask>` element (sitting in `<defs>`, appended BEFORE
+   the real body) can itself contain a `<g>` -- so a naive `svg.querySelector('g')`
+   returns THAT one (document order) instead of the actual top-level
+   content group, if the defs happen to be appended first. Symptom looked
+   exactly like a broken renderer (tiny wrong-content bounding box, only
+   one part visible) even though the renderer was already correct --
+   caught by testing the SAME render call two different ways and getting
+   two different answers, not by trusting the first measurement. Fixed by
+   tagging the real content group (`data-root="1"`) and querying for that
+   specifically, never a bare tag name.
+3. **`event.currentTarget` is null once the handler that received it
+   returns.** A pointerdown handler that saves `evt` itself and reads
+   `evt.currentTarget` later from a `pointermove`/`pointerup` closure gets
+   `null` -- the DOM clears it after dispatch. Fixed by capturing
+   `evt.currentTarget` into a plain variable inside the handler and using
+   that in the later closures, never `evt.currentTarget` again after the
+   handler that received the event has returned.
+4. **`getBBox()` on an SVG inside a `display:none` ancestor fails
+   silently.** Auto-fitting the stage's viewBox right after building it
+   returned nothing and left a stale viewBox (character invisible, stage
+   looked empty) because the parent card was still hidden at that exact
+   moment. Fixed by making the container visible BEFORE building/measuring
+   the stage, not after.
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes
