@@ -250,6 +250,33 @@ Real, reproducible bugs hit while building this -- don't reintroduce any:
    moment. Fixed by making the container visible BEFORE building/measuring
    the stage, not after.
 
+### Adobe-Animate-style posing aids (timeline scrubber, onion skin, snap, nudge)
+
+Four small additions that make manual posing feel closer to Animate's own
+editor, without inventing anything about the real rig data itself:
+- A visual timeline strip (a ruler track with keyframe diamonds and a
+  draggable playhead) alongside the plain frame-number input -- click a
+  diamond to jump, drag anywhere on the track to scrub, matching Animate's
+  own timeline instead of only a bare number field.
+- Onion skinning: the neighboring keyframes' REAL poses (same real
+  `poses[name]` data already stored on each keyframe) rendered a second
+  time at low opacity via a fresh `worldMatrix`-style composition against
+  that keyframe's own pose map (`_worldMatrixFromPoses`, a pure function
+  parallel to `worldMatrix()` but reading an arbitrary pose map instead of
+  live `this.pose`) -- a comparison guide, never new/interpolated data.
+- 15° rotation snapping (a checkbox, since touch has no Shift key; Shift
+  also works on desktop) -- same idea as Animate's Free Transform
+  constrain-angle behavior.
+- Arrow-key rotation nudge (±1°, Shift=15°) for precise correction
+  without dragging. Only the FIRST keydown of a held-key OS auto-repeat
+  run (`!evt.repeat`) pushes undo history, or holding the key floods the
+  undo stack with one entry per repeat tick instead of one per gesture --
+  same reasoning already applied to the rotation slider's `pointerdown`-
+  gated history push. Also: only skip the shortcut for a focused
+  TEXT-entry field (`input[type=text/number]`, `select`, `textarea`) --
+  checking only `tagName === "INPUT"` blocked the shortcut whenever a
+  checkbox merely had focus, since a checkbox is an `<input>` too.
+
 ### Pan/zoom and undo/redo (mobile precision + editing safety)
 
 Mobile precision problem: a tiny bone (a finger, an eyebrow) is hard to

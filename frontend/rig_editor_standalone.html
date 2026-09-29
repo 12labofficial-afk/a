@@ -53,6 +53,9 @@
   .bone-joint { fill: #fbbf24; stroke: #1e293b; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.95; }
   .bone-joint[data-locked="1"] { fill: #f87171; }
   .hide-bones .bone-line, .hide-bones .bone-joint { display: none; }
+  .onion-prev { opacity: 0.22; }
+  .onion-next { opacity: 0.22; }
+  .onion-prev, .onion-next { pointer-events: none; }
   .bones-toggle { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #cbd5e1; margin-bottom: 10px; }
   .bones-toggle input { width: auto; }
   .lock-note { color: #f87171; font-size: 0.76rem; margin-top: 6px; }
@@ -82,6 +85,25 @@
   .part-list .pparent { color: #64748b; font-size: 0.72rem; }
   .selected-panel { border-top: 1px solid #334155; padding-top: 10px; font-size: 0.82rem; }
   .kf-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tl-strip { padding: 4px 0; }
+  .tl-track {
+    position: relative; height: 34px; background: #0f172a; border: 1px solid #334155;
+    border-radius: 6px; touch-action: none; cursor: pointer;
+  }
+  .tl-keyframe {
+    position: absolute; top: 50%; width: 12px; height: 12px; background: #38bdf8;
+    border: 1px solid #0c4a6e; transform: translate(-50%, -50%) rotate(45deg);
+    cursor: pointer;
+  }
+  .tl-keyframe.active { background: #f97316; border-color: #7c2d12; }
+  .tl-playhead {
+    position: absolute; top: 0; bottom: 0; width: 2px; background: #f97316;
+    transform: translateX(-1px); pointer-events: none;
+  }
+  .tl-playhead::before {
+    content: ""; position: absolute; top: -3px; left: -5px; width: 12px; height: 12px;
+    background: #f97316; border-radius: 2px;
+  }
   .kf-chip {
     background: #1e293b; border: 1px solid #334155; border-radius: 6px;
     padding: 6px 10px; font-size: 0.78rem; cursor: pointer;
@@ -135,7 +157,11 @@
       <div class="editor-layout">
         <div>
           <div class="stage-toolbar">
-            <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="showBonesChk" checked /> Bones dikhao</label>
+            <div style="display:flex; gap:14px; flex-wrap:wrap;">
+              <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="showBonesChk" checked /> Bones dikhao</label>
+              <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="onionChk" /> Onion skin</label>
+              <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="snapChk" /> 15&deg; Snap</label>
+            </div>
             <div class="zoom-controls">
               <button class="small secondary" id="undoBtn" title="Undo" disabled>&#8630; Undo</button>
               <button class="small secondary" id="redoBtn" title="Redo" disabled>&#8631; Redo</button>
@@ -171,7 +197,13 @@
           </div>
           <div class="selected-panel">
             <h2 style="margin-bottom:4px;">Timeline</h2>
-            <div class="row" style="gap:8px;">
+            <div class="tl-strip" id="tlStrip">
+              <div class="tl-track" id="tlTrack">
+                <div id="tlKeyframesLayer"></div>
+                <div class="tl-playhead" id="tlPlayhead"></div>
+              </div>
+            </div>
+            <div class="row" style="gap:8px; margin-top:8px;">
               <div style="flex:1;">
                 <label>Frame</label>
                 <input type="number" id="frameNum" value="0" min="0" />
@@ -1335,7 +1367,11 @@ class RigView {
     this.undoStack = [];
     this.redoStack = [];
     this.onHistoryChange = null;
+    this.snapRotation = false;
+    this.onionEnabled = false;
   }
+
+  setSnapRotation(on) { this.snapRotation = on; }
 
   setMode(mode) { this.editMode = mode; }
 
@@ -1539,6 +1575,17 @@ class RigView {
       this.viewGroup.appendChild(poseGroup);
     }
 
+    // Onion-skin ghosts (a faint copy of the neighboring keyframes' real
+    // poses, same real per-part matrices, just rendered a second time at
+    // low opacity) sit above the real parts so they're visible as a
+    // comparison guide, but below the bone overlay.
+    this.onionPrevGroup = document.createElementNS(SVG_NS, "g");
+    this.onionPrevGroup.setAttribute("class", "onion-layer onion-prev");
+    this.onionNextGroup = document.createElementNS(SVG_NS, "g");
+    this.onionNextGroup.setAttribute("class", "onion-layer onion-next");
+    this.viewGroup.appendChild(this.onionPrevGroup);
+    this.viewGroup.appendChild(this.onionNextGroup);
+
     // Bone overlay (joints + connecting lines) always renders on top of
     // every part, in one dedicated layer appended last.
     const boneLayer = document.createElementNS(SVG_NS, "g");
@@ -1704,7 +1751,12 @@ class RigView {
       const curLocalPoint = applyMatToPoint(parentInv, cur);
       const curAngle = Math.atan2(curLocalPoint.y - startLocal[5], curLocalPoint.x - startLocal[4]);
       const deltaDeg = (curAngle - startAngle) * 180 / Math.PI;
-      this.pose[name] = matWithRotation(startLocal, startRotationDeg + deltaDeg);
+      // Shift held (desktop) or the "15° Snap" toggle (touch, no Shift key)
+      // rounds to Adobe-style 15-degree steps -- same idea as Animate's
+      // own Free Transform constrain-angle behavior.
+      let targetDeg = startRotationDeg + deltaDeg;
+      if (this.snapRotation || evt.shiftKey) targetDeg = Math.round(targetDeg / 15) * 15;
+      this.pose[name] = matWithRotation(startLocal, targetDeg);
     }
     this.updateTransforms();
     if (this.onPoseChange) this.onPoseChange();
@@ -1755,6 +1807,41 @@ class RigView {
       this.pose[part.name] = a.map((v, i) => v + (b[i] - v) * t);
     }
     this.updateTransforms();
+    this.updateOnionSkin(frame);
+  }
+
+  setOnionSkin(on) { this.onionEnabled = on; this.updateOnionSkin(this._lastFrame || 0); }
+
+  updateOnionSkin(frame) {
+    this._lastFrame = frame;
+    this.onionPrevGroup.innerHTML = "";
+    this.onionNextGroup.innerHTML = "";
+    if (!this.onionEnabled || this.keyframes.length < 2) return;
+    const frames = this.keyframes.map((k) => k.frame);
+    const prevCandidates = frames.filter((f) => f < frame);
+    const nextCandidates = frames.filter((f) => f > frame);
+    if (prevCandidates.length) this._renderOnionAt(Math.max(...prevCandidates), this.onionPrevGroup);
+    if (nextCandidates.length) this._renderOnionAt(Math.min(...nextCandidates), this.onionNextGroup);
+  }
+
+  _renderOnionAt(frame, container) {
+    const kf = this.keyframes.find((k) => k.frame === frame);
+    if (!kf) return;
+    for (const part of this.rig.parts) {
+      const wm = this._worldMatrixFromPoses(part.name, kf.poses);
+      const g = document.createElementNS(SVG_NS, "g");
+      g.setAttribute("transform", matToStr(wm));
+      g.append(...part.svgBody.map((n) => n.cloneNode(true)));
+      container.appendChild(g);
+    }
+  }
+
+  _worldMatrixFromPoses(name, poses) {
+    const part = this.rig.parts.find((p) => p.name === name);
+    if (!part) return [1, 0, 0, 1, 0, 0];
+    const m = poses[name] || part.matrix;
+    if (!part.parent) return m;
+    return matCompose(this._worldMatrixFromPoses(part.parent, poses), m);
   }
 
   exportJson() {
@@ -1845,6 +1932,8 @@ $("loadRigBtn").addEventListener("click", () => {
     mainView.load(mainProject, symbol, parts, fps);
     mainView.setShowBones($("showBonesChk").checked);
     mainView.setMode(document.querySelector('#modeToggle input[name="editMode"]:checked').value);
+    mainView.setSnapRotation($("snapChk").checked);
+    mainView.setOnionSkin($("onionChk").checked);
     mainView.onHistoryChange = updateUndoRedoButtons;
     currentFrame = 0;
     $("frameNum").value = 0;
@@ -1925,7 +2014,51 @@ function renderKfList() {
       renderKfList();
     });
   });
+  renderTimelineStrip();
 }
+
+// ---- Adobe-style timeline scrubber: a ruler track with keyframe diamonds
+// and a draggable playhead, instead of only a bare number input. ----
+function timelineMaxFrame() {
+  const frames = mainView.keyframes.map((k) => k.frame);
+  return Math.max(24, currentFrame, ...frames) + 4;
+}
+function jumpToFrame(frame) {
+  currentFrame = Math.max(0, Math.round(frame));
+  $("frameNum").value = currentFrame;
+  if (mainView.keyframes.length) mainView.applyFrame(currentFrame);
+  if (mainView.selectedPart) showSelectedPanel(mainView.selectedPart);
+}
+function renderTimelineStrip() {
+  const maxFrame = timelineMaxFrame();
+  const layer = $("tlKeyframesLayer");
+  layer.innerHTML = mainView.keyframes.map((k) =>
+    `<div class="tl-keyframe ${k.frame === currentFrame ? "active" : ""}" data-frame="${k.frame}" style="left:${(k.frame / maxFrame) * 100}%" title="Frame ${k.frame}"></div>`
+  ).join("");
+  layer.querySelectorAll(".tl-keyframe").forEach((el) => {
+    el.addEventListener("pointerdown", (evt) => {
+      evt.stopPropagation();
+      jumpToFrame(parseInt(el.getAttribute("data-frame"), 10));
+      renderKfList();
+    });
+  });
+  $("tlPlayhead").style.left = `${(currentFrame / maxFrame) * 100}%`;
+}
+function scrubFromClientX(clientX) {
+  const rect = $("tlTrack").getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  jumpToFrame(frac * timelineMaxFrame());
+  renderKfList();
+}
+let scrubbing = false;
+$("tlTrack").addEventListener("pointerdown", (evt) => {
+  scrubbing = true;
+  try { $("tlTrack").setPointerCapture(evt.pointerId); } catch (e) { /* ignore */ }
+  scrubFromClientX(evt.clientX);
+});
+$("tlTrack").addEventListener("pointermove", (evt) => { if (scrubbing) scrubFromClientX(evt.clientX); });
+$("tlTrack").addEventListener("pointerup", () => { scrubbing = false; });
+$("tlTrack").addEventListener("pointercancel", () => { scrubbing = false; });
 $("frameNum").addEventListener("change", () => {
   currentFrame = parseInt($("frameNum").value || "0", 10);
   if (mainView.keyframes.length) mainView.applyFrame(currentFrame);
@@ -1945,6 +2078,9 @@ $("playBtn").addEventListener("click", () => {
   let f = mainView.keyframes[0].frame;
   playTimer = setInterval(() => {
     mainView.applyFrame(f);
+    currentFrame = f;
+    $("frameNum").value = f;
+    $("tlPlayhead").style.left = `${(f / timelineMaxFrame()) * 100}%`;
     f += 1;
     if (f > maxFrame) f = mainView.keyframes[0].frame;
   }, 1000 / fps);
@@ -1969,6 +2105,37 @@ $("exportBtn").addEventListener("click", () => {
 
 $("showBonesChk").addEventListener("change", () => {
   if (mainView) mainView.setShowBones($("showBonesChk").checked);
+});
+$("onionChk").addEventListener("change", () => {
+  if (mainView) mainView.setOnionSkin($("onionChk").checked);
+});
+$("snapChk").addEventListener("change", () => {
+  if (mainView) mainView.setSnapRotation($("snapChk").checked);
+});
+
+// Arrow-key nudge: with a part selected, Left/Right rotate it by 1 degree
+// (Shift = 15, matching the Snap step) without needing to drag at all --
+// useful for small precise corrections, on desktop or a bluetooth
+// keyboard on mobile. Ignored while typing in any text/number field.
+window.addEventListener("keydown", (evt) => {
+  if (!mainView || !mainView.selectedPart) return;
+  // Only skip real text-entry fields -- a checkbox/radio is still an
+  // <input> too and must not block the shortcut just for having focus.
+  if (document.activeElement.matches('input[type="text"], input[type="number"], select, textarea')) return;
+  if (evt.key !== "ArrowLeft" && evt.key !== "ArrowRight") return;
+  evt.preventDefault();
+  const step = evt.shiftKey ? 15 : 1;
+  const delta = evt.key === "ArrowLeft" ? -step : step;
+  // Only the first keydown of a held-key auto-repeat run is a new,
+  // undoable action -- otherwise holding the arrow key floods the undo
+  // stack with one entry per repeat tick instead of one per gesture.
+  if (!evt.repeat) mainView.pushHistory();
+  const m = mainView.pose[mainView.selectedPart];
+  const newDeg = matDecomposeRotation(m) + delta;
+  mainView.pose[mainView.selectedPart] = matWithRotation(m, newDeg);
+  mainView.updateTransforms();
+  if (mainView.editMode === "move") mainView._commitBase(mainView.selectedPart);
+  $("rotSlider").value = Math.round(newDeg);
 });
 
 // ---- undo/redo ----
