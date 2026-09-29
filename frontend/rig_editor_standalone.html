@@ -118,7 +118,7 @@
         <div class="sidebar">
           <div>
             <h2 style="margin-bottom:4px;">Parts</h2>
-            <p class="hint">Part pe tap karke select karo, phir stage pe drag karke move karo.</p>
+            <p class="hint">Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Poore character ko move karne ke liye root part (jiska koi parent na ho) ko drag karo.</p>
             <ul class="part-list" id="partList"></ul>
           </div>
           <div class="selected-panel" id="selectedPanel" style="display:none;">
@@ -1087,8 +1087,20 @@ function extractCharacterParts(project, targetSymbol) {
   let sawIkTree = false;
   const parts = [];
   const ikNameToPart = {};
+  let paintOrder = 0;
 
-  for (const layer of layers) {
+  // Real z-order (paint/stacking order) is a GLOBAL, hierarchy-independent
+  // concept in the file -- a bone can be a CHILD in the IK tree yet still
+  // need to paint BEHIND its own parent's art (e.g. an arm tucked behind
+  // the torso for a turned pose). It must never be derived from the bone
+  // tree. Same real convention as renderTimeline: layers are walked back-
+  // to-front (LAST layer in the file = painted first = furthest back), and
+  // elements within one layer keep their real file order (see CLAUDE.md's
+  // xfl2svg layer-order note). `paintOrder` records that real sequence so
+  // the pose editor can render parts in real stacking order while still
+  // using the (separate) IK tree only for transform inheritance.
+  for (let layerIdx = layers.length - 1; layerIdx >= 0; layerIdx--) {
+    const layer = layers[layerIdx];
     const found = getFrameForLayer(layer, 0);
     if (!found) continue;
     const { frame } = found;
@@ -1106,7 +1118,7 @@ function extractCharacterParts(project, targetSymbol) {
       const pivot = instancePivot(inst);
       const ikName = inst.getAttribute("name");
       const partName = (insts.length > 1 ? basename(unescapeEntities(lib)) : layer.getAttribute("name")) || ikName;
-      const part = { name: partName, lib: unescapeEntities(lib), matrix, pivot, ikName, parent: null };
+      const part = { name: partName, lib: unescapeEntities(lib), matrix, pivot, ikName, parent: null, paintOrder: paintOrder++ };
       parts.push(part);
       if (ikName) ikNameToPart[ikName] = partName;
     }
@@ -1214,6 +1226,17 @@ class RigView {
     this._buildDom();
   }
 
+  // Paint order (real, hierarchy-INDEPENDENT z-order -- see part.paintOrder
+  // in extractCharacterParts) and the IK bone tree (parent/child, used only
+  // for transform inheritance) are two separate real facts about the file
+  // and must never be conflated: a bone can be a CHILD in the tree yet
+  // still need to paint BEHIND its own parent's art (a real, confirmed
+  // case: an arm bone whose real file position paints before -- i.e.
+  // behind -- its own parent TORSO, so a hand can tuck behind the body).
+  // So each part gets its OWN flat, un-nested render group, appended to
+  // the stage in real paintOrder; only worldMatrix() (pure math, no DOM
+  // nesting) follows the bone tree, and every part's flat group is set to
+  // its live WORLD matrix directly, recomputed on every pose change.
   _buildDom() {
     this.svgEl.innerHTML = "";
     this.partGroups = {};
@@ -1224,24 +1247,11 @@ class RigView {
     this.svgEl.appendChild(defsEl);
     for (const part of this.rig.parts) defsEl.append(...part.svgDefs);
 
-    // A real bone's own joint sits at that part's local origin (0,0) --
-    // this isn't a guess: it's the same point that already anchors the
-    // part's own real matrix, which is why nesting it inside the part's
-    // pose <g> makes it track the live pose with zero extra math (SVG's
-    // own transform composition places it correctly for free). The line
-    // from a parent joint to a child's joint is drawn INSIDE the parent's
-    // pose group so it renders in the parent's own coordinate frame; its
-    // endpoint is the child's real translation (matrix[4], matrix[5]),
-    // kept in sync in updateTransforms() -- not invented geometry, the
-    // exact same numbers already driving that child's own placement.
-    const overallScale = this._roughScale();
-    const dotR = overallScale * 6;
-
-    const buildPart = (name) => {
-      const part = this.rig.parts.find((p) => p.name === name);
+    const byPaintOrder = this.rig.parts.slice().sort((a, b) => a.paintOrder - b.paintOrder);
+    for (const part of byPaintOrder) {
       const poseGroup = document.createElementNS(SVG_NS, "g");
       const contentGroup = document.createElementNS(SVG_NS, "g");
-      contentGroup.setAttribute("data-part", name);
+      contentGroup.setAttribute("data-part", part.name);
       contentGroup.style.cursor = "grab";
       contentGroup.append(...part.svgBody.map((n) => n.cloneNode(true)));
       poseGroup.appendChild(contentGroup);
@@ -1259,43 +1269,34 @@ class RigView {
         outline.style.opacity = 0;
         poseGroup.appendChild(outline);
       } catch (e) { /* empty content (e.g. an all-mask part) -- no outline */ }
-      this.outlineRects[name] = outline;
+      this.outlineRects[part.name] = outline;
 
-      for (const childName of childrenOf(this.rig.parts, name)) {
-        const childMatrix = this.pose[childName];
+      this.partGroups[part.name] = poseGroup;
+      this.svgEl.appendChild(poseGroup);
+    }
+
+    // Bone overlay (joints + connecting lines) always renders on top of
+    // every part, in one dedicated layer appended last.
+    const boneLayer = document.createElementNS(SVG_NS, "g");
+    boneLayer.setAttribute("class", "bone-layer");
+    for (const part of this.rig.parts) {
+      if (part.parent) {
         const line = document.createElementNS(SVG_NS, "line");
         line.setAttribute("class", "bone-line");
-        line.setAttribute("x1", 0); line.setAttribute("y1", 0);
-        line.setAttribute("x2", childMatrix[4]); line.setAttribute("y2", childMatrix[5]);
-        poseGroup.appendChild(line);
-        this.boneLines[childName] = line;
-        poseGroup.appendChild(buildPart(childName));
+        boneLayer.appendChild(line);
+        this.boneLines[part.name] = line;
       }
-
       const dot = document.createElementNS(SVG_NS, "circle");
       dot.setAttribute("class", "bone-joint");
-      dot.setAttribute("cx", 0); dot.setAttribute("cy", 0); dot.setAttribute("r", dotR);
       if (part.rotationEnabled === false) dot.setAttribute("data-locked", "1");
-      poseGroup.appendChild(dot);
-      this.jointDots[name] = dot;
+      boneLayer.appendChild(dot);
+      this.jointDots[part.name] = dot;
+    }
+    this.svgEl.appendChild(boneLayer);
 
-      this.partGroups[name] = poseGroup;
-      return poseGroup;
-    };
-
-    for (const r of rootsOf(this.rig.parts)) this.svgEl.appendChild(buildPart(r));
     this._wireDrag();
     this.updateTransforms();
     this._fitViewBox();
-  }
-
-  _roughScale() {
-    // A rough characteristic size (translation magnitude across all real
-    // part matrices) so joint dots/bone lines are visible at a sane size
-    // whatever units this particular file uses -- not a fixed constant.
-    let maxD = 1;
-    for (const p of this.rig.parts) maxD = Math.max(maxD, Math.hypot(p.matrix[4], p.matrix[5]));
-    return maxD / 120;
   }
 
   setShowBones(on) { this.svgEl.classList.toggle("hide-bones", !on); }
@@ -1310,13 +1311,39 @@ class RigView {
   }
 
   updateTransforms() {
+    // Joint dots/bone lines are positioned by WORLD coordinates directly
+    // (the bone-layer group itself carries no transform), so one fixed
+    // radius already reads as the same real size for every joint -- unlike
+    // the earlier nested-group version, there's no per-part compounded
+    // scale left to correct for.
+    const worldMats = {};
     for (const part of this.rig.parts) {
+      const wm = this.worldMatrix(part.name);
+      worldMats[part.name] = wm;
       const g = this.partGroups[part.name];
-      const m = this.pose[part.name] || part.matrix;
-      if (g) g.setAttribute("transform", matToStr(m));
-      const line = this.boneLines[part.name];
-      if (line) { line.setAttribute("x2", m[4]); line.setAttribute("y2", m[5]); }
+      if (g) g.setAttribute("transform", matToStr(wm));
     }
+    const dotR = this._dotRadius();
+    for (const part of this.rig.parts) {
+      const wm = worldMats[part.name];
+      const dot = this.jointDots[part.name];
+      if (dot) { dot.setAttribute("cx", wm[4]); dot.setAttribute("cy", wm[5]); dot.setAttribute("r", dotR); }
+      const line = this.boneLines[part.name];
+      if (line && part.parent) {
+        const pm = worldMats[part.parent];
+        line.setAttribute("x1", pm[4]); line.setAttribute("y1", pm[5]);
+        line.setAttribute("x2", wm[4]); line.setAttribute("y2", wm[5]);
+      }
+    }
+  }
+
+  _dotRadius() {
+    if (this._cachedDotR) return this._cachedDotR;
+    try {
+      const bbox = this.svgEl.getBBox();
+      this._cachedDotR = Math.max(bbox.width, bbox.height) * 0.012;
+    } catch (e) { this._cachedDotR = 5; }
+    return this._cachedDotR;
   }
 
   highlightSelected() {
@@ -1367,7 +1394,19 @@ class RigView {
     const parentInv = matInverse(parentWorld);
     const start = this.svgPoint(evt);
     const startLocal = this.pose[name].slice();
-    this.dragState = { name, parentInv, start, startLocal };
+    // A real bone's joint (where it attaches to its parent) never moves --
+    // only the ANGLE at that joint changes. Dragging a part with a real
+    // parent therefore only ever rotates it around its own local origin
+    // (translation in startLocal[4],[5] is left untouched, forever), which
+    // is what guarantees it can never visually detach from its parent no
+    // matter how far the pointer moves. A part with no parent (the rig's
+    // own root) has no joint to preserve, so it still free-translates --
+    // that's how the whole character gets repositioned on stage.
+    const mode = part.parent ? "rotate" : "translate";
+    const startLocalPoint = applyMatToPoint(parentInv, start);
+    const startAngle = Math.atan2(startLocalPoint.y - startLocal[5], startLocalPoint.x - startLocal[4]);
+    const startRotationDeg = matDecomposeRotation(startLocal);
+    this.dragState = { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg };
     targetEl.setPointerCapture(evt.pointerId);
     const move = (e) => this._onPointerMove(e);
     const up = () => {
@@ -1381,14 +1420,20 @@ class RigView {
 
   _onPointerMove(evt) {
     if (!this.dragState) return;
-    const { name, parentInv, start, startLocal } = this.dragState;
+    const { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg } = this.dragState;
     const cur = this.svgPoint(evt);
-    const d0 = applyMatToPoint(parentInv, start);
-    const d1 = applyMatToPoint(parentInv, cur);
-    const dx = d1.x - d0.x, dy = d1.y - d0.y;
-    const m = startLocal.slice();
-    m[4] += dx; m[5] += dy;
-    this.pose[name] = m;
+    if (mode === "translate") {
+      const d0 = applyMatToPoint(parentInv, start);
+      const d1 = applyMatToPoint(parentInv, cur);
+      const m = startLocal.slice();
+      m[4] += d1.x - d0.x; m[5] += d1.y - d0.y;
+      this.pose[name] = m;
+    } else {
+      const curLocalPoint = applyMatToPoint(parentInv, cur);
+      const curAngle = Math.atan2(curLocalPoint.y - startLocal[5], curLocalPoint.x - startLocal[4]);
+      const deltaDeg = (curAngle - startAngle) * 180 / Math.PI;
+      this.pose[name] = matWithRotation(startLocal, startRotationDeg + deltaDeg);
+    }
     this.updateTransforms();
     if (this.onPoseChange) this.onPoseChange();
   }
@@ -1405,7 +1450,10 @@ class RigView {
     part.parent = newParent || null;
     const parentWorld = newParent ? this.worldMatrix(newParent) : [1, 0, 0, 1, 0, 0];
     this.pose[name] = matCompose(matInverse(parentWorld), world);
-    this._buildDom(); // hierarchy changed -> nesting must be rebuilt
+    // Paint order/DOM structure is independent of the bone tree (see
+    // _buildDom's own note), so reassigning a parent only changes which
+    // worldMatrix() chain this part follows -- no DOM rebuild needed.
+    this.updateTransforms();
   }
 
   recordKeyframe(frame) {

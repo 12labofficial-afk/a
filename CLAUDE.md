@@ -250,6 +250,57 @@ Real, reproducible bugs hit while building this -- don't reintroduce any:
    moment. Fixed by making the container visible BEFORE building/measuring
    the stage, not after.
 
+### Dragging must rotate a bone around its own joint, never translate it
+
+First posing pass let a drag freely translate the dragged part's own local
+matrix -- which moves its joint (the point it's rigidly attached to its
+parent at) away from where it's really anchored, so any real seam (a
+sleeve meeting a shoulder, a head meeting a neck) visibly pulls apart the
+moment you drag. A real bone doesn't stretch or slide at its own joint --
+only the ANGLE there changes. Fixed by never touching `startLocal[4],[5]`
+(the part's real, authored joint position) during a drag: the pointer's
+motion is converted to an angle around that fixed point (in the parent's
+own local frame, via `parentInv`) and only the ROTATION component of the
+part's matrix is ever updated. A part with NO parent (the rig's own root)
+has no joint to preserve, so it still free-translates -- that's how the
+whole character gets repositioned on stage. This guarantees a bone can
+never visually detach from its parent no matter how far it's dragged.
+
+### Real z-order (paint order) is INDEPENDENT of the real bone hierarchy
+
+A second, more serious bug this same rotate-drag fix exposed once bones
+were rotated far from rest: a part rotated near/behind its own parent's
+own art started rendering IN FRONT of it every time, however it was
+posed -- e.g. a real right-arm bone (`UP HND R`) whose real file position
+comes BEFORE (i.e. paints behind) its own parent (`TORSO`), confirmed
+directly against the real file open in Adobe Animate's own Library/Stage
+(a real hand meant to sit on a layer behind the body). The bug: the first
+version nested every part's rendered content inside its PARENT's own SVG
+`<g>` (parent's own art, then children's `<g>`s appended after it) --
+which conflates two things that are actually independent real facts about
+an XFL file: the IK bone tree (parent/child, for pose inheritance only)
+and the real paint/stacking order (which part of the file gets drawn over
+which other part, completely independent of whose bone is whose parent).
+Nesting-for-render always paints a child over its own parent's art, which
+is wrong whenever the real file's own z-order says otherwise.
+
+Fixed by decoupling the two: `extractCharacterParts` now also records each
+part's real `paintOrder` (walking layers back-to-front and elements within
+a layer in real file order -- the exact same traversal `renderTimeline`
+already uses, just recording a running index instead of appending SVG
+nodes). The editor renders every part in its OWN flat, un-nested SVG `<g>`,
+inserted into the DOM in real `paintOrder` (not hierarchy order) so SVG's
+own painter's-order semantics do the right thing regardless of bone
+depth. The bone tree is used ONLY for `worldMatrix()` -- a pure function,
+no DOM nesting involved -- and every part's flat group's `transform` is
+set directly to its own live world matrix, recomputed for every part on
+every pose change. Bone-tree depth and paint order can now differ freely,
+exactly like the real file. (A welcome side effect: joint-dot circles,
+now positioned by world coordinates directly instead of inheriting
+compounded per-branch scale from nested ancestors, finally render at a
+consistent, real screen size everywhere instead of varying wildly by how
+deep a bone sat in its own chain.)
+
 ### Visible skeleton overlay (real joints + bone lines, real constraints)
 
 The real `<IKTree>` carries more than just parent/child names -- each real
