@@ -250,6 +250,33 @@ Real, reproducible bugs hit while building this -- don't reintroduce any:
    moment. Fixed by making the container visible BEFORE building/measuring
    the stage, not after.
 
+### Visible skeleton overlay (real joints + bone lines, real constraints)
+
+The real `<IKTree>` carries more than just parent/child names -- each real
+`IKNode`/`ChildNode` also has a real `boneName`, and some real files set a
+real `rotationEnabled="false"` (seen: 4 joints in RAJ BHAI's own rig, e.g.
+TORSO relative to MIDLE PRT) or real translation-constraint attributes
+(`xTranslationMin/Max` etc) -- the artist's own limits on that joint, not
+something to invent OR ignore. `extractCharacterParts` now also returns
+each part's real `boneName` and `rotationEnabled`.
+
+The editor draws a live skeleton (a joint dot at each part's own local
+origin, a line from each parent's origin to each child's) using ONLY
+numbers already driving the real pose -- a joint dot nested inside that
+part's own pose `<g>` lands at its live world position for free (SVG's own
+transform composition), and a bone line's endpoint is just that child's
+own real matrix translation (`matrix[4], matrix[5]`), kept in sync in
+`updateTransforms()`. This is not extra/invented geometry -- decoding the
+IKNode's own `location` attribute (a separate, syntactically-similar-to-
+edge-format hex-encoded field) was deliberately NOT used for this, since
+its exact coordinate space was never verified against ground truth the way
+everything else here was; the already-proven real matrices were sufficient
+and safer. A joint whose real `rotationEnabled` is `false` renders red
+instead of yellow, and the rotation slider shows a note (still usable --
+manual posing is allowed to exceed the original rig's own limits, since
+the human is explicitly overriding it here -- but the note makes that an
+informed choice, not a silent one).
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes

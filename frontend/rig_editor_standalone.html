@@ -49,6 +49,13 @@
   }
   .stage-wrap svg { width: 100%; height: 100%; touch-action: none; display: block; }
   .part-outline { fill: none; stroke: #f97316; stroke-width: 3; pointer-events: none; vector-effect: non-scaling-stroke; }
+  .bone-line { stroke: #38bdf8; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.85; }
+  .bone-joint { fill: #fbbf24; stroke: #1e293b; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.95; }
+  .bone-joint[data-locked="1"] { fill: #f87171; }
+  .hide-bones .bone-line, .hide-bones .bone-joint { display: none; }
+  .bones-toggle { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #cbd5e1; margin-bottom: 10px; }
+  .bones-toggle input { width: auto; }
+  .lock-note { color: #f87171; font-size: 0.76rem; margin-top: 6px; }
   .sidebar { display: flex; flex-direction: column; gap: 12px; max-height: 78vh; overflow-y: auto; }
   .part-list { list-style: none; margin: 0; padding: 0; font-size: 0.82rem; }
   .part-list li {
@@ -102,8 +109,11 @@
 
     <div id="poseTab">
       <div class="editor-layout">
-        <div class="stage-wrap">
-          <svg id="stageSvg" viewBox="-300 -900 700 1100" preserveAspectRatio="xMidYMid meet"></svg>
+        <div>
+          <label class="bones-toggle"><input type="checkbox" id="showBonesChk" checked /> Bones dikhao (real joints + connections)</label>
+          <div class="stage-wrap">
+            <svg id="stageSvg" viewBox="-300 -900 700 1100" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
         </div>
         <div class="sidebar">
           <div>
@@ -117,6 +127,7 @@
             <select id="parentPick"></select>
             <label style="margin-top:8px;">Rotation</label>
             <input type="range" id="rotSlider" min="-180" max="180" value="0" step="1" />
+            <div class="lock-note" id="lockNote" style="display:none;">Is bone ka rotation asli rig mein disabled hai (rotationEnabled="false") -- slider phir bhi kaam karega, par original file isko rotate nahi karti thi.</div>
             <button class="small secondary" id="resetPoseBtn">Is part ka pose reset karo</button>
           </div>
           <div class="selected-panel">
@@ -1006,12 +1017,24 @@ function renderSymbolStandalone(project, name) {
 // ---------------------------------------------------------------------------
 
 function ikHierarchy(frameEl) {
+  // Returns {parents: {ikNodeName: parentIkNodeName}, meta: {ikNodeName:
+  // {boneName, rotationEnabled}}} -- real per-bone identity and the real
+  // rotation-lock constraint the artist set on that joint (seen in the
+  // wild: some joints have rotationEnabled="false" in the real file,
+  // meaning the artist's own rig never allowed that joint to rotate).
   const parents = {};
+  const meta = {};
   const iktree = findAllLocal(frameEl, "IKTree")[0];
-  if (!iktree) return parents;
+  if (!iktree) return { parents, meta };
   function walk(node, parentName) {
     const name = node.getAttribute("name");
     if (name && parentName) parents[name] = parentName;
+    if (name) {
+      meta[name] = {
+        boneName: node.getAttribute("boneName") || null,
+        rotationEnabled: node.getAttribute("rotationEnabled") !== "false",
+      };
+    }
     const childContainer = findChildLocal(node, "childNodes");
     if (childContainer) {
       for (const child of Array.from(childContainer.children)) walk(child, name);
@@ -1020,7 +1043,7 @@ function ikHierarchy(frameEl) {
   for (const top of Array.from(iktree.children)) {
     if (["IKNode", "ChildNode"].includes(localName(top))) walk(top, null);
   }
-  return parents;
+  return { parents, meta };
 }
 
 function matCompose(p, c) {
@@ -1060,6 +1083,8 @@ function basename(path) { return path.split("/").pop(); }
 function extractCharacterParts(project, targetSymbol) {
   const layers = project.getTimelineLayers(targetSymbol);
   let ikParents = {};
+  let ikMeta = {};
+  let sawIkTree = false;
   const parts = [];
   const ikNameToPart = {};
 
@@ -1067,7 +1092,10 @@ function extractCharacterParts(project, targetSymbol) {
     const found = getFrameForLayer(layer, 0);
     if (!found) continue;
     const { frame } = found;
-    if (Object.keys(ikParents).length === 0) ikParents = ikHierarchy(frame);
+    if (!sawIkTree) {
+      const ik = ikHierarchy(frame);
+      if (Object.keys(ik.meta).length) { ikParents = ik.parents; ikMeta = ik.meta; sawIkTree = true; }
+    }
     const elementsEl = findChildLocal(frame, "elements");
     if (!elementsEl) continue;
     const insts = findChildrenLocal(elementsEl, "DOMSymbolInstance");
@@ -1084,9 +1112,12 @@ function extractCharacterParts(project, targetSymbol) {
     }
   }
 
-  if (Object.keys(ikParents).length) {
+  if (sawIkTree) {
     for (const part of parts) {
       const parentIkName = part.ikName ? ikParents[part.ikName] : null;
+      const m = part.ikName ? ikMeta[part.ikName] : null;
+      part.boneName = m ? m.boneName : null;
+      part.rotationEnabled = m ? m.rotationEnabled : true;
       delete part.ikName;
       if (parentIkName && ikNameToPart[parentIkName]) {
         const parentPartName = ikNameToPart[parentIkName];
@@ -1094,7 +1125,7 @@ function extractCharacterParts(project, targetSymbol) {
       }
     }
   } else {
-    for (const part of parts) delete part.ikName;
+    for (const part of parts) { delete part.ikName; part.boneName = null; part.rotationEnabled = true; }
   }
 
   const byName = new Map(parts.map((p) => [p.name, p]));
@@ -1162,6 +1193,8 @@ class RigView {
     this.selectedPart = null;
     this.partGroups = {}; // name -> pose <g> (has the live transform)
     this.outlineRects = {}; // name -> selection <rect>
+    this.jointDots = {}; // name -> <circle> at that part's own world origin
+    this.boneLines = {}; // childName -> <line> from parent origin to child origin
     this.dragState = null;
     this.onSelect = null;
   }
@@ -1185,9 +1218,24 @@ class RigView {
     this.svgEl.innerHTML = "";
     this.partGroups = {};
     this.outlineRects = {};
+    this.jointDots = {};
+    this.boneLines = {};
     const defsEl = document.createElementNS(SVG_NS, "defs");
     this.svgEl.appendChild(defsEl);
     for (const part of this.rig.parts) defsEl.append(...part.svgDefs);
+
+    // A real bone's own joint sits at that part's local origin (0,0) --
+    // this isn't a guess: it's the same point that already anchors the
+    // part's own real matrix, which is why nesting it inside the part's
+    // pose <g> makes it track the live pose with zero extra math (SVG's
+    // own transform composition places it correctly for free). The line
+    // from a parent joint to a child's joint is drawn INSIDE the parent's
+    // pose group so it renders in the parent's own coordinate frame; its
+    // endpoint is the child's real translation (matrix[4], matrix[5]),
+    // kept in sync in updateTransforms() -- not invented geometry, the
+    // exact same numbers already driving that child's own placement.
+    const overallScale = this._roughScale();
+    const dotR = overallScale * 6;
 
     const buildPart = (name) => {
       const part = this.rig.parts.find((p) => p.name === name);
@@ -1214,8 +1262,23 @@ class RigView {
       this.outlineRects[name] = outline;
 
       for (const childName of childrenOf(this.rig.parts, name)) {
+        const childMatrix = this.pose[childName];
+        const line = document.createElementNS(SVG_NS, "line");
+        line.setAttribute("class", "bone-line");
+        line.setAttribute("x1", 0); line.setAttribute("y1", 0);
+        line.setAttribute("x2", childMatrix[4]); line.setAttribute("y2", childMatrix[5]);
+        poseGroup.appendChild(line);
+        this.boneLines[childName] = line;
         poseGroup.appendChild(buildPart(childName));
       }
+
+      const dot = document.createElementNS(SVG_NS, "circle");
+      dot.setAttribute("class", "bone-joint");
+      dot.setAttribute("cx", 0); dot.setAttribute("cy", 0); dot.setAttribute("r", dotR);
+      if (part.rotationEnabled === false) dot.setAttribute("data-locked", "1");
+      poseGroup.appendChild(dot);
+      this.jointDots[name] = dot;
+
       this.partGroups[name] = poseGroup;
       return poseGroup;
     };
@@ -1225,6 +1288,17 @@ class RigView {
     this.updateTransforms();
     this._fitViewBox();
   }
+
+  _roughScale() {
+    // A rough characteristic size (translation magnitude across all real
+    // part matrices) so joint dots/bone lines are visible at a sane size
+    // whatever units this particular file uses -- not a fixed constant.
+    let maxD = 1;
+    for (const p of this.rig.parts) maxD = Math.max(maxD, Math.hypot(p.matrix[4], p.matrix[5]));
+    return maxD / 120;
+  }
+
+  setShowBones(on) { this.svgEl.classList.toggle("hide-bones", !on); }
 
   _fitViewBox() {
     try {
@@ -1238,7 +1312,10 @@ class RigView {
   updateTransforms() {
     for (const part of this.rig.parts) {
       const g = this.partGroups[part.name];
-      if (g) g.setAttribute("transform", matToStr(this.pose[part.name] || part.matrix));
+      const m = this.pose[part.name] || part.matrix;
+      if (g) g.setAttribute("transform", matToStr(m));
+      const line = this.boneLines[part.name];
+      if (line) { line.setAttribute("x2", m[4]); line.setAttribute("y2", m[5]); }
     }
   }
 
@@ -1442,6 +1519,7 @@ $("loadRigBtn").addEventListener("click", () => {
     mainView.onSelect = (name) => showSelectedPanel(name);
     mainView.onPoseChange = () => {};
     mainView.load(mainProject, symbol, parts, fps);
+    mainView.setShowBones($("showBonesChk").checked);
     currentFrame = 0;
     $("frameNum").value = 0;
     renderPartList();
@@ -1481,6 +1559,7 @@ function showSelectedPanel(name) {
     `<option value="${n}" ${n === part.parent ? "selected" : ""}>${n}</option>`).join("");
   const m = mainView.pose[name] || part.matrix;
   $("rotSlider").value = Math.round(matDecomposeRotation(m));
+  $("lockNote").style.display = part.rotationEnabled === false ? "block" : "none";
 }
 
 $("parentPick").addEventListener("change", () => {
@@ -1557,6 +1636,10 @@ $("exportBtn").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 });
 
+$("showBonesChk").addEventListener("change", () => {
+  if (mainView) mainView.setShowBones($("showBonesChk").checked);
+});
+
 // ---- tabs ----
 $("tabPose").addEventListener("click", () => {
   $("tabPose").classList.remove("inactive");
@@ -1612,6 +1695,7 @@ $("loadTargetRigBtn").addEventListener("click", () => {
     $("retargetStageCard").style.display = "block";
     targetView = new RigView($("retargetSvg"));
     targetView.load(targetProject, symbol, parts, fps);
+    targetView.setShowBones(true);
 
     const missing = targetView.applyAnimationJson(anim);
     $("missingParts").textContent = missing.length
