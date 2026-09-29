@@ -250,6 +250,34 @@ Real, reproducible bugs hit while building this -- don't reintroduce any:
    moment. Fixed by making the container visible BEFORE building/measuring
    the stage, not after.
 
+### Real bug: rotation ran backwards once the user actually zoomed in
+
+Reported as "jab mai ghumata hu toh ulta ho jata hai" (rotating does the
+opposite) right after pan/zoom shipped -- and only reproduced once the
+test actually zoomed in first; at zoom 1 (the untouched default) it was
+never wrong, which is exactly why it wasn't caught earlier. Root cause:
+`svgPoint()` mapped a screen point through `svgEl.getScreenCTM()` alone --
+correct for the pan/zoom bookkeeping itself (which stores its `tx/ty` in
+that same fixed, un-zoomed root space, by design), but WRONG for
+drag/pose math, which needs the point expressed in `viewGroup`'s own
+local space (the space every part's real `worldMatrix()`/`pose` already
+lives in). At zoom's identity transform the two spaces are numerically
+identical, hiding the bug completely; any real zoom or pan exposed it,
+including sign-flipping the rotation direction. Fixed with a second
+method, `localPoint()`, that inverts `viewGroup.getScreenCTM()` instead
+(which already reflects the FULL chain up to and including viewGroup's
+own current transform) -- used only by the two drag/rotate call sites in
+`_onPointerDown`/`_onPointerMove`; the pan/zoom code keeps using the
+original `svgPoint()` on purpose. Verified two ways before believing the
+fix: a live-browser test dragging a known clockwise arc while zoomed
+(previously swept backwards and at the wrong magnitude, now swept exactly
+the dragged angle), and a standalone port of the exact matrix math in
+Node against an intentionally mirrored parent (to rule out a second,
+independent hypothesis -- that a mirrored ancestor could also flip the
+sign -- which measurement disproved: a mirror's effect on the angle
+cancels out by construction once the same mirrored parent is recomposed
+for rendering, so it was never actually a real bug).
+
 ### Adobe-Animate-style posing aids (timeline scrubber, onion skin, snap, nudge)
 
 Four small additions that make manual posing feel closer to Animate's own
@@ -276,6 +304,22 @@ editor, without inventing anything about the real rig data itself:
   TEXT-entry field (`input[type=text/number]`, `select`, `textarea`) --
   checking only `tagName === "INPUT"` blocked the shortcut whenever a
   checkbox merely had focus, since a checkbox is an `<input>` too.
+
+### Bone-overlay legibility: root joint color, and direction arrows
+
+Two small but real usability requests once bones were actually visible: a
+distinct color for the RIG's root joint (no real parent) so it reads as
+"the anchor" at a glance -- purple, vs. yellow for a normal joint and red
+for a real rotation-locked one (data-root="1" set once, in `_buildDom`,
+never guessed at render time). And a direction arrow on every bone line,
+parent -> child. First attempt used a real SVG `<marker>` (`marker-end`)
+at the LINE's own endpoint -- which is exactly where the CHILD's own
+joint dot also sits, and since dots are drawn after lines, the dot fully
+covered the (much smaller) arrowhead marker; it never showed up in an
+actual screenshot despite being "correctly" wired. Fixed by drawing the
+arrow by hand instead, as a small triangle `<polygon>` positioned and
+rotated (via `atan2` of the parent->child vector) at the line's MIDPOINT
+-- nothing else sits there, so it can't be covered by any dot.
 
 ### Pan/zoom and undo/redo (mobile precision + editing safety)
 

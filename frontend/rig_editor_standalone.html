@@ -52,6 +52,8 @@
   .bone-line { stroke: #38bdf8; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.85; }
   .bone-joint { fill: #fbbf24; stroke: #1e293b; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.95; }
   .bone-joint[data-locked="1"] { fill: #f87171; }
+  .bone-joint[data-root="1"] { fill: #a855f7; stroke: #e9d5ff; }
+  .bone-arrow-head { fill: #38bdf8; }
   .hide-bones .bone-line, .hide-bones .bone-joint { display: none; }
   .onion-prev { opacity: 0.22; }
   .onion-next { opacity: 0.22; }
@@ -171,6 +173,7 @@
             </div>
           </div>
           <p class="hint">Mobile pe do ungliyon se pinch karke zoom karo, ek ungli se khaali jagah pe drag karke pan karo -- chhote parts ko sahi se pakadne ke liye zoom in karo.</p>
+          <p class="hint"><span style="color:#a855f7;">&#9679;</span> purple dot = root (jiska koi parent nahi), <span style="color:#fbbf24;">&#9679;</span> yellow = normal joint, <span style="color:#f87171;">&#9679;</span> red = is bone ka rotation asli rig mein disabled hai, arrow &#8594; hamesha parent se child ki taraf dikhata hai.</p>
           <div class="stage-wrap">
             <svg id="stageSvg" viewBox="-300 -900 700 1100" preserveAspectRatio="xMidYMid meet"></svg>
           </div>
@@ -1341,6 +1344,7 @@ class RigView {
     this.outlineRects = {}; // name -> selection <rect>
     this.jointDots = {}; // name -> <circle> at that part's own world origin
     this.boneLines = {}; // childName -> <line> from parent origin to child origin
+    this.boneArrows = {}; // childName -> <polygon> direction arrow at the line's midpoint
     this.dragState = null;
     this.onSelect = null;
     // "animate": drag rotates a part around its own fixed real joint (see
@@ -1537,6 +1541,7 @@ class RigView {
     this.outlineRects = {};
     this.jointDots = {};
     this.boneLines = {};
+    this.boneArrows = {};
     this._cachedDotR = null;
     this.zoom = { scale: 1, tx: 0, ty: 0 };
     const defsEl = document.createElementNS(SVG_NS, "defs");
@@ -1596,9 +1601,19 @@ class RigView {
         line.setAttribute("class", "bone-line");
         boneLayer.appendChild(line);
         this.boneLines[part.name] = line;
+        // An SVG marker sitting at the line's own endpoint got hidden
+        // under the child's own joint dot (same point, dot drawn after
+        // it) -- so the direction arrow is instead a small triangle drawn
+        // and rotated by hand at the line's MIDPOINT (no dot there to
+        // cover it), always pointing parent -> child.
+        const arrow = document.createElementNS(SVG_NS, "polygon");
+        arrow.setAttribute("class", "bone-arrow-head");
+        boneLayer.appendChild(arrow);
+        this.boneArrows[part.name] = arrow;
       }
       const dot = document.createElementNS(SVG_NS, "circle");
       dot.setAttribute("class", "bone-joint");
+      if (!part.parent) dot.setAttribute("data-root", "1");
       if (part.rotationEnabled === false) dot.setAttribute("data-locked", "1");
       boneLayer.appendChild(dot);
       this.jointDots[part.name] = dot;
@@ -1645,6 +1660,14 @@ class RigView {
         const pm = worldMats[part.parent];
         line.setAttribute("x1", pm[4]); line.setAttribute("y1", pm[5]);
         line.setAttribute("x2", wm[4]); line.setAttribute("y2", wm[5]);
+        const arrow = this.boneArrows[part.name];
+        if (arrow) {
+          const mx = (pm[4] + wm[4]) / 2, my = (pm[5] + wm[5]) / 2;
+          const angleDeg = Math.atan2(wm[5] - pm[5], wm[4] - pm[4]) * 180 / Math.PI;
+          const s = dotR * 0.9;
+          arrow.setAttribute("points", `${s},0 ${-s * 0.6},${s * 0.7} ${-s * 0.6},${-s * 0.7}`);
+          arrow.setAttribute("transform", `translate(${mx},${my}) rotate(${angleDeg})`);
+        }
       }
     }
   }
@@ -1679,10 +1702,36 @@ class RigView {
     return matCompose(this.worldMatrix(part.parent), m);
   }
 
+  // Maps a screen point into the SVG ROOT's own fixed user space (the
+  // permanent, viewBox-defined space -- NOT affected by the viewGroup's
+  // own pan/zoom transform, since that's a child transform getScreenCTM()
+  // on the root never sees). Correct for the pan/zoom bookkeeping above,
+  // which stores tx/ty in that exact same fixed space -- but NOT correct
+  // for drag/pose math, which needs the space one level further in (see
+  // localPoint below).
   svgPoint(evt) {
     const pt = this.svgEl.createSVGPoint();
     pt.x = evt.clientX; pt.y = evt.clientY;
     const ctm = this.svgEl.getScreenCTM().inverse();
+    return pt.matrixTransform(ctm);
+  }
+
+  // Maps a screen point into the viewGroup's OWN local space -- i.e. the
+  // same space every part's worldMatrix()/pose is expressed in. Real bug
+  // fixed here: dragging used svgPoint() (root space) directly, which
+  // only matches this space while zoom is at its identity (scale 1, no
+  // pan) -- any time the user had actually zoomed or panned in (exactly
+  // when precise dragging matters most), every drag/rotate computed a
+  // WRONG delta, up to and including the rotation running backwards,
+  // since the screen point never got the viewGroup's OWN pan/zoom
+  // transform undone before being compared against fixed-space pose
+  // data. getScreenCTM() called on viewGroup itself already reflects the
+  // FULL chain (root CTM composed with viewGroup's current transform),
+  // so inverting THAT (instead of the root's alone) is the complete fix.
+  localPoint(evt) {
+    const pt = this.svgEl.createSVGPoint();
+    pt.x = evt.clientX; pt.y = evt.clientY;
+    const ctm = this.viewGroup.getScreenCTM().inverse();
     return pt.matrixTransform(ctm);
   }
 
@@ -1705,7 +1754,7 @@ class RigView {
     const part = this.rig.parts.find((p) => p.name === name);
     const parentWorld = part.parent ? this.worldMatrix(part.parent) : [1, 0, 0, 1, 0, 0];
     const parentInv = matInverse(parentWorld);
-    const start = this.svgPoint(evt);
+    const start = this.localPoint(evt);
     const startLocal = this.pose[name].slice();
     // A real bone's joint (where it attaches to its parent) never moves --
     // only the ANGLE at that joint changes. Dragging a part with a real
@@ -1740,7 +1789,7 @@ class RigView {
   _onPointerMove(evt) {
     if (!this.dragState) return;
     const { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg } = this.dragState;
-    const cur = this.svgPoint(evt);
+    const cur = this.localPoint(evt);
     if (mode === "translate") {
       const d0 = applyMatToPoint(parentInv, start);
       const d1 = applyMatToPoint(parentInv, cur);
