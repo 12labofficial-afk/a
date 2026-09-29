@@ -56,6 +56,17 @@
   .bones-toggle { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #cbd5e1; margin-bottom: 10px; }
   .bones-toggle input { width: auto; }
   .lock-note { color: #f87171; font-size: 0.76rem; margin-top: 6px; }
+  .mode-toggle { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .mode-opt {
+    flex: 1; min-width: 220px; display: flex; gap: 8px; align-items: flex-start;
+    background: #1e293b; border: 2px solid #334155; border-radius: 10px;
+    padding: 10px 12px; cursor: pointer;
+  }
+  .mode-opt.active { border-color: #f97316; background: rgba(249,115,22,0.12); }
+  .mode-opt input { width: auto; margin-top: 3px; }
+  .mode-opt span { display: flex; flex-direction: column; gap: 2px; }
+  .mode-opt strong { font-size: 0.86rem; }
+  .mode-opt small { color: #94a3b8; font-size: 0.74rem; margin: 0; }
   .sidebar { display: flex; flex-direction: column; gap: 12px; max-height: 78vh; overflow-y: auto; }
   .part-list { list-style: none; margin: 0; padding: 0; font-size: 0.82rem; }
   .part-list li {
@@ -108,6 +119,16 @@
     </div>
 
     <div id="poseTab">
+      <div class="mode-toggle" id="modeToggle">
+        <label class="mode-opt active" data-mode="animate">
+          <input type="radio" name="editMode" value="animate" checked />
+          <span><strong>Animation</strong><small>Keyframes se pose/animate karo -- parts kabhi alag nahi honge.</small></span>
+        </label>
+        <label class="mode-opt" data-mode="move">
+          <input type="radio" name="editMode" value="move" />
+          <span><strong>Move Parts</strong><small>Rig calibrate karo -- part ko uske bone pe sahi se attach karo (free move).</small></span>
+        </label>
+      </div>
       <div class="editor-layout">
         <div>
           <label class="bones-toggle"><input type="checkbox" id="showBonesChk" checked /> Bones dikhao (real joints + connections)</label>
@@ -118,7 +139,7 @@
         <div class="sidebar">
           <div>
             <h2 style="margin-bottom:4px;">Parts</h2>
-            <p class="hint">Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Poore character ko move karne ke liye root part (jiska koi parent na ho) ko drag karo.</p>
+            <p class="hint" id="dragHint">Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Poore character ko move karne ke liye root part (jiska koi parent na ho) ko drag karo.</p>
             <ul class="part-list" id="partList"></ul>
           </div>
           <div class="selected-panel" id="selectedPanel" style="display:none;">
@@ -129,6 +150,11 @@
             <input type="range" id="rotSlider" min="-180" max="180" value="0" step="1" />
             <div class="lock-note" id="lockNote" style="display:none;">Is bone ka rotation asli rig mein disabled hai (rotationEnabled="false") -- slider phir bhi kaam karega, par original file isko rotate nahi karti thi.</div>
             <button class="small secondary" id="resetPoseBtn">Is part ka pose reset karo</button>
+          </div>
+          <div class="selected-panel" id="moveModePanel" style="display:none;">
+            <h2 style="margin-bottom:4px;">Rig Calibration</h2>
+            <p class="hint">Jab parts sahi se bones pe attach ho jayein, ye corrected rig ek nayi .fla file mein save kar lo -- usi ko baad mein dubara upload kar sakte ho.</p>
+            <button class="small" id="exportFlaBtn" style="width:100%;">&#11015; Corrected .fla Export</button>
           </div>
           <div class="selected-panel">
             <h2 style="margin-bottom:4px;">Timeline</h2>
@@ -146,6 +172,10 @@
               <button class="small secondary" id="playBtn">&#9654; Play</button>
               <button class="small secondary" id="stopBtn" style="display:none;">&#9632; Stop</button>
               <button class="small secondary" id="exportBtn">&#11015; JSON Export</button>
+            </div>
+            <div style="margin-top:10px;">
+              <label>Pehle ki animation JSON load karo (isi character pe)</label>
+              <input type="file" id="loadAnimJsonFile" accept=".json" />
             </div>
           </div>
         </div>
@@ -676,9 +706,10 @@ function colorEffectToFilter(ce) {
 // ---------------------------------------------------------------------------
 
 class XflProject {
-  constructor(zip, docXml) {
-    this.zip = zip; // Map<path, string content>
+  constructor(zip, docXml, zipObj) {
+    this.zip = zip; // Map<path, string content> (XML text cache)
     this.doc = docXml; // parsed DOMDocument.xml
+    this.zipObj = zipObj || null; // raw JSZip instance (the real, un-unwrapped .fla zip) -- kept so a corrected rig can be written back into an actual re-importable .fla, touching only the one symbol file that changed
     this.symbolPaths = new Map(); // name -> library-relative path (no .xml)
     this.symbolCache = new Map(); // name -> parsed XML document
     this.timelineCache = new Map();
@@ -796,7 +827,7 @@ async function loadProjectFromZipBytes(buffer) {
     throw new Error("Ye ek valid .fla (XFL / uncompressed Animate format) nahi lag rahi -- DOMDocument.xml nahi mila.");
   }
   const docXml = new DOMParser().parseFromString(zipMap.get("DOMDocument.xml"), "application/xml");
-  return new XflProject(zipMap, docXml);
+  return new XflProject(zipMap, docXml, realZip);
 }
 
 function listCharacterCandidates(project) {
@@ -1130,6 +1161,13 @@ function extractCharacterParts(project, targetSymbol) {
       const m = part.ikName ? ikMeta[part.ikName] : null;
       part.boneName = m ? m.boneName : null;
       part.rotationEnabled = m ? m.rotationEnabled : true;
+      // Kept (not deleted) as an internal field: exportCorrectedFla needs
+      // the real instance `name` attribute to find the exact same
+      // <DOMSymbolInstance> again when writing corrected matrices back.
+      // Harmless to keep on the object -- exportJson() only serializes
+      // name/parent/base_matrix explicitly, so this never leaks into a
+      // saved animation JSON.
+      part._ikName = part.ikName;
       delete part.ikName;
       if (parentIkName && ikNameToPart[parentIkName]) {
         const parentPartName = ikNameToPart[parentIkName];
@@ -1137,7 +1175,7 @@ function extractCharacterParts(project, targetSymbol) {
       }
     }
   } else {
-    for (const part of parts) { delete part.ikName; part.boneName = null; part.rotationEnabled = true; }
+    for (const part of parts) { part._ikName = part.ikName; delete part.ikName; part.boneName = null; part.rotationEnabled = true; }
   }
 
   const byName = new Map(parts.map((p) => [p.name, p]));
@@ -1149,6 +1187,57 @@ function extractCharacterParts(project, targetSymbol) {
   }
 
   return { parts, fps: project.frameRate };
+}
+
+// Writes a calibrated rig's corrected REST matrices back into the real
+// XFL XML they came from, and re-zips it as a real, re-uploadable .fla --
+// only the exact <DOMSymbolInstance>s this rig touched are changed
+// (matched by their own real `name` attribute, the same `_ikName` used to
+// build the rig in the first place); every other file in the project is
+// carried over completely unchanged.
+async function exportCorrectedFla(project, targetSymbol, parts) {
+  if (!project.zipObj) throw new Error("Original zip data uplabdh nahi hai -- dubara file upload karo.");
+  const relPath = project.symbolPaths.get(targetSymbol);
+  if (!relPath) throw new Error(`Symbol '${targetSymbol}' ka file path nahi mila.`);
+  const file = project._findLibraryFile(relPath);
+  if (!file) throw new Error(`Symbol '${targetSymbol}' ki real XML file nahi mili.`);
+  const originalText = project.zip.get(file);
+  if (!originalText) throw new Error(`'${file}' ka original content cache mein nahi mila.`);
+
+  const doc = new DOMParser().parseFromString(originalText, "application/xml");
+  const byName = new Map(parts.map((p) => [p.name, p]));
+  const absoluteCache = new Map();
+  function absoluteOf(part) {
+    if (absoluteCache.has(part.name)) return absoluteCache.get(part.name);
+    const abs = part.parent && byName.has(part.parent)
+      ? matCompose(absoluteOf(byName.get(part.parent)), part.matrix)
+      : part.matrix.slice();
+    absoluteCache.set(part.name, abs);
+    return abs;
+  }
+
+  const allInstances = findAllLocal(doc.documentElement, "DOMSymbolInstance");
+  let touched = 0;
+  for (const part of parts) {
+    if (!part._ikName) continue;
+    const inst = allInstances.find((el) => el.getAttribute("name") === part._ikName);
+    if (!inst) continue;
+    const matrixEl = findAllLocal(inst, "Matrix")[0];
+    if (!matrixEl) continue;
+    const [a, b, c, d, tx, ty] = absoluteOf(part);
+    matrixEl.setAttribute("a", String(a));
+    matrixEl.setAttribute("b", String(b));
+    matrixEl.setAttribute("c", String(c));
+    matrixEl.setAttribute("d", String(d));
+    matrixEl.setAttribute("tx", String(tx));
+    matrixEl.setAttribute("ty", String(ty));
+    touched++;
+  }
+  if (!touched) throw new Error("Koi bhi real part instance match nahi hua -- kuch update nahi ho paya.");
+
+  const newXmlText = new XMLSerializer().serializeToString(doc);
+  project.zipObj.file(file, newXmlText);
+  return project.zipObj.generateAsync({ type: "blob" });
 }
 
 function analyzeTimelineLayers(layers) {
@@ -1209,6 +1298,22 @@ class RigView {
     this.boneLines = {}; // childName -> <line> from parent origin to child origin
     this.dragState = null;
     this.onSelect = null;
+    // "animate": drag rotates a part around its own fixed real joint (see
+    // the note in _onPointerDown) -- for posing/keyframing, parts can
+    // never separate. "move": drag freely repositions a part (a one-time
+    // rig-calibration step, e.g. nudging art that doesn't sit exactly on
+    // its own bone) and COMMITS the result as the part's new rest matrix
+    // (_commitBase) -- this is not a pose to animate, it's correcting the
+    // rig itself, so it must persist as the new baseline, not just a
+    // transient pose value.
+    this.editMode = "animate";
+  }
+
+  setMode(mode) { this.editMode = mode; }
+
+  _commitBase(name) {
+    const part = this.rig.parts.find((p) => p.name === name);
+    part.matrix = this.pose[name].slice();
   }
 
   load(project, symbol, parts, fps) {
@@ -1402,7 +1507,12 @@ class RigView {
     // matter how far the pointer moves. A part with no parent (the rig's
     // own root) has no joint to preserve, so it still free-translates --
     // that's how the whole character gets repositioned on stage.
-    const mode = part.parent ? "rotate" : "translate";
+    // "move" mode is rig calibration, not posing -- always a free drag
+    // (there's no joint to protect; the human is deliberately re-anchoring
+    // the art). "animate" mode keeps the joint-preserving rotate-only
+    // behavior (rotate for anything with a real parent, free-translate
+    // only for a parentless root, so the whole character can be placed).
+    const mode = this.editMode === "move" ? "translate" : (part.parent ? "rotate" : "translate");
     const startLocalPoint = applyMatToPoint(parentInv, start);
     const startAngle = Math.atan2(startLocalPoint.y - startLocal[5], startLocalPoint.x - startLocal[4]);
     const startRotationDeg = matDecomposeRotation(startLocal);
@@ -1411,6 +1521,7 @@ class RigView {
     const move = (e) => this._onPointerMove(e);
     const up = () => {
       this.dragState = null;
+      if (this.editMode === "move") this._commitBase(name);
       targetEl.removeEventListener("pointermove", move);
       targetEl.removeEventListener("pointerup", up);
     };
@@ -1621,6 +1732,7 @@ $("rotSlider").addEventListener("input", () => {
   const m = mainView.pose[mainView.selectedPart];
   mainView.pose[mainView.selectedPart] = matWithRotation(m, parseFloat($("rotSlider").value));
   mainView.updateTransforms();
+  if (mainView.editMode === "move") mainView._commitBase(mainView.selectedPart);
 });
 $("resetPoseBtn").addEventListener("click", () => {
   if (!mainView.selectedPart) return;
@@ -1686,6 +1798,62 @@ $("exportBtn").addEventListener("click", () => {
 
 $("showBonesChk").addEventListener("change", () => {
   if (mainView) mainView.setShowBones($("showBonesChk").checked);
+});
+
+const DRAG_HINT = {
+  animate: "Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Poore character ko move karne ke liye root part (jiska koi parent na ho) ko drag karo.",
+  move: "RIG CALIBRATION MODE: ab drag se part FREELY move hota hai (uska apna joint bhi shift hota hai) -- isse part ko uske real bone pe sahi jagah pe attach karo. Jab sahi lage, 'Corrected .fla Export' se save kar lo.",
+};
+document.querySelectorAll('#modeToggle input[name="editMode"]').forEach((radio) => {
+  radio.addEventListener("change", () => {
+    const mode = radio.value;
+    document.querySelectorAll(".mode-opt").forEach((el) => el.classList.toggle("active", el.dataset.mode === mode));
+    $("dragHint").textContent = DRAG_HINT[mode];
+    $("moveModePanel").style.display = mode === "move" ? "block" : "none";
+    if (mainView) mainView.setMode(mode);
+  });
+});
+
+$("loadAnimJsonFile").addEventListener("change", async () => {
+  const file = $("loadAnimJsonFile").files[0];
+  if (!file || !mainView) return;
+  try {
+    const anim = JSON.parse(await file.text());
+    const missing = mainView.applyAnimationJson(anim);
+    currentFrame = mainView.keyframes.length ? mainView.keyframes[0].frame : 0;
+    $("frameNum").value = currentFrame;
+    if (mainView.keyframes.length) mainView.applyFrame(currentFrame);
+    renderKfList();
+    if (missing.length) {
+      $("uploadStatus").textContent = `JSON load ho gaya, par in parts ka naam match nahi hua: ${missing.join(", ")}`;
+    } else {
+      $("uploadStatus").textContent = "Animation JSON load ho gayi -- saare parts match ho gaye.";
+    }
+  } catch (e) {
+    alert("JSON load nahi hua: " + e.message);
+  }
+});
+
+$("exportFlaBtn").addEventListener("click", async () => {
+  $("exportFlaBtn").disabled = true;
+  $("exportFlaBtn").textContent = "Bana raha hoon...";
+  try {
+    const blob = await exportCorrectedFla(mainProject, mainView.rig.symbol, mainView.rig.parts);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${mainView.rig.symbol.replace(/[^A-Za-z0-9_-]/g, "_")}_corrected.fla`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    alert("Export fail ho gaya: " + e.message);
+    console.error(e);
+  } finally {
+    $("exportFlaBtn").disabled = false;
+    $("exportFlaBtn").textContent = "⬇ Corrected .fla Export";
+  }
 });
 
 // ---- tabs ----

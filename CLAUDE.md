@@ -250,6 +250,48 @@ Real, reproducible bugs hit while building this -- don't reintroduce any:
    moment. Fixed by making the container visible BEFORE building/measuring
    the stage, not after.
 
+### Two edit modes: Animation (rotate-only) vs Move Parts (rig calibration)
+
+The rotate-only drag above is correct for POSING, but sometimes a part's
+own art genuinely doesn't sit exactly on its bone (the artist's registration
+point wasn't quite at the visual joint) and needs a one-time correction,
+not a pose. So the editor has an explicit mode toggle:
+- **Animation** (default): drag rotates around the fixed real joint, as
+  above -- for posing/keyframing, parts can never separate.
+- **Move Parts**: drag free-translates (and the rotation slider free-
+  rotates) a part, and COMMITS the result as that part's new REST matrix
+  (`RigView._commitBase`) -- this is rig calibration, not a pose to record,
+  so it must persist as the new baseline rather than live in `pose` only.
+Never let Move-mode edits leak into `pose` alone without also committing
+to `part.matrix`, or the correction is lost the moment a keyframe/frame
+change resets `pose` back to the old base.
+
+### Exporting a calibrated rig back to a real, re-uploadable .fla
+
+`exportCorrectedFla` writes Move-mode corrections back into the REAL XFL
+XML they came from and re-zips it as an actual `.fla` the tool's own
+upload flow accepts unchanged -- not a custom/invented format. It touches
+ONLY the exact `<DOMSymbolInstance>` elements this rig's parts came from
+(matched by their own real `name` attribute, kept internally as
+`part._ikName` specifically for this -- never deleted like the public
+`ikName` field, since without it there'd be no way to find the same
+instance again to correct it) and leaves every other file in the project
+zip byte-for-byte untouched. Requires the ORIGINAL zip object, not just
+the XML-text cache used for reading (`XflProject.zipObj`, retained from
+`loadProjectFromZipBytes`'s already-unwrapped real `.fla` zip -- an
+`.ana.zip` bundle's outer wrapper (swf/previews/manifest) is deliberately
+NOT reproduced, since a plain `.fla` round-trips through this same tool's
+upload just fine and there's nothing real to regenerate for the rest).
+Corrected matrices are each part's real ABSOLUTE matrix (parent-local
+`part.matrix` composed up the real parent chain, root's own matrix already
+being absolute) -- writing back the parent-local value directly would be
+wrong, since the file's own `<Matrix>` attributes are always absolute.
+Verified by a full round-trip: export, reload the exported blob as a
+fresh project, re-run `extractCharacterParts` on it, and confirm the same
+part count, same hierarchy, and the corrected matrix survives (to float-
+rounding noise from the text round-trip, same ~1e-13 order as every other
+matrix check in this tool).
+
 ### Dragging must rotate a bone around its own joint, never translate it
 
 First posing pass let a drag freely translate the dragged part's own local
