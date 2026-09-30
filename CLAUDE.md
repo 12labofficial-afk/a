@@ -700,33 +700,88 @@ all means inventing new geometry, which is exactly what the core rule
 normally forbids. Explicitly asked the user first (per that same rule)
 whether to add a synthetic version anyway; they said yes.
 
-Implementation, in the standalone editor (`ui.js`):
-- `part.stretchAxis`: precomputed ONCE per part in `_buildDom`, from the
-  part's own REAL rendered local bbox center relative to its real pivot
-  (normalized direction) -- the axis is derived from real geometry even
-  though the stretch itself is invented.
-- `matStretchLocal(part, currentAngleDeg)`: returns a pivot-anchored 2x2
-  scale (`I + k * (axis outer axis)`) where `k` scales with how far
-  `currentAngleDeg` has moved from the part's real REST angle
-  (`matDecomposeRotation(part.matrix)`), capped at `MAX_STRETCH = 0.12`
-  (12%) so it stays a subtle nicety.
-- **Real regression caught by the EXISTING test suite, not just visually**:
-  the first version baked this stretch directly into `matWithRotationAroundPivot`'s
-  returned matrix (the same one stored in `pose[name]`) -- which skewed
-  its column vectors, so `matDecomposeRotation` (used by the rotation
-  slider, "15° Snap", arrow-nudge, and this project's own regression test
-  for snap-angle correctness) no longer recovered the true angle: a
-  "15° snap" drag decomposed back to 15.39° instead of exactly 15. Fixed
-  by keeping `pose[name]` a PURE similarity transform (stretch removed
-  from `matWithRotationAroundPivot` entirely) and instead composing
-  `matStretchLocal`'s result OUTSIDE it, only on the rendered `<g>`'s
-  display transform in `updateTransforms()` (`matCompose(worldMatrix,
-  stretchMat)`) -- never stored in `pose`, never exported (JSON/.fla/.ana
-  keyframes stay the real, unstretched matrices), and never used for the
-  bone-overlay dots/lines (which must keep showing the real, unstretched
-  rig). Re-ran the full regression suite after the fix and the snap-angle
-  test is back to exactly 15°, confirming the two concerns (visual
-  stretch vs. correct angle bookkeeping) are now fully decoupled.
+Implementation, in the standalone editor (`ui.js`), kept strictly
+render-only from the start this time (see the regression below for why):
+`matStretchLocal(part, pose)` returns a matrix composed OUTSIDE/AFTER a
+part's clean world matrix, only on the rendered `<g>`'s display transform
+in `updateTransforms()` (`matCompose(worldMatrix, stretchMat)`) -- never
+stored in `pose[name]`, never exported (JSON/.fla/.ana keyframes stay the
+real, unstretched matrices), and never used for the bone-overlay dots/
+lines (which must keep showing the real, unstretched rig).
+
+**First mechanism tried, and why it wasn't enough**: elongating a part
+along a fixed local axis (its own real bbox-center-vs-pivot direction),
+scaled by how far the CURRENT angle has moved from the part's real REST
+angle (`matDecomposeRotation(part.matrix)`), capped at 12%. Reported back
+immediately (with a reference screenshot of a competitor's smooth knee
+bend) that a real knee (`DN LEG`, child of `UP LEG`) still showed an
+obvious wedge-shaped gap at a large bend. Verified directly rather than
+tuning blindly: rotated `DN LEG` 130° from rest and screenshotted -- the
+gap was still clearly there even at that axis-stretch's max. Root cause:
+the gap opens on the PIVOT side (the "overlap flap" that hides the seam
+at rest rotates away WITH the child as it swings), not the far end, so
+elongating away from the pivot never touched the actual problem.
+
+**Fixed with plain isotropic DILATION instead of a directional axis** --
+growing a shape in EVERY direction from a fixed point pushes its edge
+outward on the pivot side too, regardless of which way it rotated, so no
+direction ever needs to be guessed. Two dilations are composed onto each
+part's display matrix in `matStretchLocal`:
+1. Around the part's OWN pivot, scaled by how far ITS OWN rotation has
+   moved from its own rest angle (the child, e.g. `DN LEG`, grows near
+   the knee as it swings).
+2. Around each of the part's DIRECT CHILDREN's real joint points, each
+   expressed in THIS part's own local space via that child's real REST
+   matrix (`part.childJoints`, precomputed once in `_buildDom`, a fixed
+   point that never changes with posing), scaled by how far THAT CHILD's
+   rotation has moved from ITS rest angle (the parent, e.g. `UP LEG`,
+   ALSO grows near the knee as the child swings) -- so both sides reach
+   toward each other, not just one. `MAX_STRETCH` raised to `0.35` (35%)
+   to actually be visible enough to close a real gap, not just a subtle
+   nicety like the first attempt. Verified by re-screenshotting the same
+   130°-bent knee -- the gap is fully closed with a natural-looking
+   fold, and a moderate 40° bend (normal walk-cycle range) still looks
+   clean with no over-bulging.
+
+**Real regression caught by the EXISTING test suite while building the
+FIRST version, not just visually**: that version baked the stretch
+directly into `matWithRotationAroundPivot`'s returned matrix (the same
+one stored in `pose[name]`) -- which skewed its column vectors, so
+`matDecomposeRotation` (used by the rotation slider, "15° Snap", arrow-
+nudge, and this project's own regression test for snap-angle correctness)
+no longer recovered the true angle: a "15° snap" drag decomposed back to
+15.39° instead of exactly 15. This is why the render-only design above
+(stretch composed OUTSIDE `pose[name]`, never baked in) was non-
+negotiable for the rewrite -- re-ran the full regression suite after each
+version and the snap-angle test is back to exactly 15° with the dilation
+approach too.
+
+### Single-finger pan now needs an explicit toggle (default OFF)
+
+Referencing the same competitor app's screenshot: it gates its own
+"Move" behavior behind an explicit toggle button -- dragging does nothing
+until that mode is deliberately turned on. Root cause of what this was
+actually fixing: `_wireZoomPan`'s one-finger drag-to-pan is a background
+gesture on the WHOLE stage SVG (a part's own pointerdown handler calls
+`stopPropagation()`, so pan only ever fires for a genuine miss) -- a
+touch aimed at a small part (a finger, an eyebrow) that missed by a few
+pixels fell through to this same handler and panned the ENTIRE view,
+which reads exactly like "the whole character moved" even though no pose
+data changed at all -- compounding confusion from the earlier root-lock
+work in the same conversation.
+
+Fixed by adding `RigView.panEnabled` (default `false`) and gating the
+single-pointer branch of `_wireZoomPan`'s `onMove` behind it -- a new
+"Pan (1 finger)" checkbox (`panChk`, next to "Bones dikhao"/"Onion skin"/
+"15° Snap") is the only way to arm it, mirroring the reference app's
+explicit "whichever function is turned ON, only that will work" model.
+Two-finger pinch-zoom is deliberately NOT gated by this -- it's already a
+distinct, deliberate two-finger gesture that a stray one-finger miss can
+never trigger, so there's nothing accidental to protect against there.
+Verified directly: a drag on empty stage space with the checkbox off
+leaves `zoom.tx/ty` byte-for-byte unchanged; the same drag after checking
+it moves the view as expected; pinch-zoom continues to work regardless
+of the checkbox state.
 
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 

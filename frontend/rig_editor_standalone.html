@@ -163,6 +163,7 @@
               <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="showBonesChk" /> Bones dikhao</label>
               <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="onionChk" /> Onion skin</label>
               <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="snapChk" /> 15&deg; Snap</label>
+              <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="panChk" /> Pan (1 finger)</label>
             </div>
             <div class="zoom-controls">
               <button class="small secondary" id="undoBtn" title="Undo" disabled>&#8630; Undo</button>
@@ -172,7 +173,7 @@
               <button class="small secondary" id="zoomInBtn" title="Zoom in">+</button>
             </div>
           </div>
-          <p class="hint">Mobile pe do ungliyon se pinch karke zoom karo, ek ungli se khaali jagah pe drag karke pan karo -- chhote parts ko sahi se pakadne ke liye zoom in karo.</p>
+          <p class="hint">Mobile pe do ungliyon se pinch karke zoom hamesha karte raho. Ek ungli se khaali jagah drag karke pan karne ke liye upar "Pan (1 finger)" ON karna padega -- default OFF hai, taki part ko pakadte waqt chuk jaane pe poora view/character accidentally hil na jaye.</p>
           <p class="hint"><span style="color:#a855f7;">&#9679;</span> purple dot = root (jiska koi parent nahi), <span style="color:#fbbf24;">&#9679;</span> yellow = normal joint, <span style="color:#f87171;">&#9679;</span> red = is bone ka rotation asli rig mein disabled hai, arrow &#8594; hamesha parent se child ki taraf dikhata hai.</p>
           <div class="stage-wrap">
             <svg id="stageSvg" viewBox="-300 -900 700 1100" preserveAspectRatio="xMidYMid meet"></svg>
@@ -1401,33 +1402,59 @@ function matWithRotationAroundPivot(m, part, angleDeg) {
 // <DOMSymbolInstance>), so a part rotated well away from the artist's own
 // originally-drawn angle can show a real seam/gap at its joint (the art
 // was only drawn to fit seamlessly AT that angle). Explicitly OK'd by the
-// user to add a small non-real "stretch to soften the seam" -- gently
-// elongating the part along its own real geometry's away-from-pivot
-// direction (`part.stretchAxis`, precomputed once in `_buildDom` from the
-// part's real rendered bbox, never guessed), scaled by how far the
-// CURRENT angle has moved from the part's real REST angle (`part.matrix`'s
-// own rotation) and capped at MAX_STRETCH so it stays a subtle nicety, not
-// a visible warp. Returns a matrix meant to be composed OUTSIDE/AFTER the
-// part's clean world matrix (`matCompose(worldMatrix, this)`), applied
-// only to the rendered `<g>`'s transform -- never stored in `pose`, never
-// exported, and never used for the bone-overlay dots/lines, which must
-// keep showing the real (unstretched) rig.
-const MAX_STRETCH = 0.12;
-function matStretchLocal(part, currentAngleDeg) {
-  if (!part.stretchAxis) return [1, 0, 0, 1, 0, 0];
-  const restDeg = matDecomposeRotation(part.matrix);
-  const deltaDeg = ((currentAngleDeg - restDeg + 540) % 360) - 180;
+// user to add a small non-real "stretch to soften the seam". Never stored
+// in `pose`, never exported, and never used for the bone-overlay dots/
+// lines, which must keep showing the real (unstretched) rig -- composed
+// OUTSIDE/AFTER the part's clean world matrix, only on the rendered `<g>`.
+//
+// First version elongated a part along a fixed local axis, away from its
+// OWN pivot -- wrong direction: a real gap (e.g. a knee bent ~130°) opens
+// up on the PIVOT side (the "overlap flap" that hid the seam at rest
+// rotates away with the child), not the far end, so stretching away from
+// the pivot never touched it -- confirmed directly: rotating a real knee
+// (`DN LEG`) 130° from rest and screenshotting still showed a clear
+// wedge-shaped gap even with that stretch applied at its max.
+//
+// Fixed with plain DILATION (isotropic scale, not a directional axis)
+// anchored at a joint point -- growing a shape in EVERY direction from a
+// fixed point pushes its edge outward on the pivot side too, regardless
+// of which way it rotated, so no direction needs to be guessed at all.
+// Two dilations are composed onto each part's display matrix:
+// 1. Around the part's OWN pivot, scaled by how far ITS OWN rotation has
+//    moved from its own real rest angle -- the child (e.g. DN LEG) grows
+//    near the knee as IT swings.
+// 2. Around each of the part's DIRECT CHILDREN's joint points (that
+//    child's real pivot, expressed in THIS part's own local space via its
+//    real rest matrix -- a fixed point, precomputed once in `_buildDom`
+//    as `part.childJoints`), scaled by how far THAT CHILD's rotation has
+//    moved from ITS rest angle -- the parent (e.g. UP LEG) ALSO grows
+//    near the knee as the child swings, so both sides reach toward each
+//    other instead of only one.
+const MAX_STRETCH = 0.35;
+function stretchScaleForDelta(deltaDeg) {
   const t = Math.min(Math.abs(deltaDeg) / 90, 1);
-  const k = t * MAX_STRETCH;
-  const { x: ux, y: uy } = part.stretchAxis;
-  // S = I + k * (u outer u): scales by (1+k) along axis u, 1 perpendicular.
-  const sxx = 1 + k * ux * ux, sxy = k * ux * uy, syy = 1 + k * uy * uy;
-  const [px, py] = part.pivot;
-  // Anchored at the pivot: result = S*(p - pivot) + pivot, as one combined
-  // affine matrix (translate(pivot) . S . translate(-pivot)).
-  const tx = px - (sxx * px + sxy * py);
-  const ty = py - (sxy * px + syy * py);
-  return [sxx, sxy, sxy, syy, tx, ty];
+  return 1 + t * MAX_STRETCH;
+}
+function dilateAroundPoint(px, py, scale) {
+  return [scale, 0, 0, scale, px - scale * px, py - scale * py];
+}
+function matStretchLocal(part, pose) {
+  let m = [1, 0, 0, 1, 0, 0];
+  if (part.parent) {
+    const restDeg = matDecomposeRotation(part.matrix);
+    const curDeg = matDecomposeRotation(pose[part.name] || part.matrix);
+    const deltaDeg = ((curDeg - restDeg + 540) % 360) - 180;
+    const scale = stretchScaleForDelta(deltaDeg);
+    m = matCompose(m, dilateAroundPoint(part.pivot[0], part.pivot[1], scale));
+  }
+  for (const cj of part.childJoints || []) {
+    const restDeg = matDecomposeRotation(cj.child.matrix);
+    const curDeg = matDecomposeRotation(pose[cj.child.name] || cj.child.matrix);
+    const deltaDeg = ((curDeg - restDeg + 540) % 360) - 180;
+    const scale = stretchScaleForDelta(deltaDeg);
+    m = matCompose(m, dilateAroundPoint(cj.point.x, cj.point.y, scale));
+  }
+  return m;
 }
 
 // Sibling elements within one <elements> block keep real file order (first
@@ -1476,6 +1503,18 @@ class RigView {
     // completely unaffected by how far the user has zoomed/panned in.
     this.zoom = { scale: 1, tx: 0, ty: 0 };
     this._bgPointers = new Map();
+    // A one-finger drag on EMPTY stage space pans the view -- convenient
+    // when deliberate, but a touch that just barely misses a small part
+    // (a finger, an eyebrow) fell through to this same background handler
+    // and panned the whole view instead, which reads exactly like "the
+    // character moved" even though no pose data changed at all. Reported
+    // directly against a reference app (autodraft.in) that gates its own
+    // "Move" behavior behind an explicit toggle -- nothing drags unless
+    // that mode is deliberately on. Same fix here: single-finger pan is
+    // now OFF by default (`panEnabled`) and only re-armed via an explicit
+    // toggle; two-finger pinch-zoom is intentionally NOT gated by this --
+    // it's a deliberate two-finger gesture, never an accidental miss.
+    this.panEnabled = false;
     this._wireZoomPan();
     // Undo/redo: a full snapshot of everything an edit can touch (base
     // matrices, hierarchy, live pose, keyframes) pushed BEFORE each
@@ -1488,6 +1527,7 @@ class RigView {
   }
 
   setSnapRotation(on) { this.snapRotation = on; }
+  setPanEnabled(on) { this.panEnabled = on; }
 
   setMode(mode) { this.editMode = mode; }
 
@@ -1575,10 +1615,12 @@ class RigView {
       pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
       if (pointers.size === 1) {
         const curRoot = this.svgPoint(evt);
-        this.zoom.tx += curRoot.x - this._panRootStart.x;
-        this.zoom.ty += curRoot.y - this._panRootStart.y;
+        if (this.panEnabled) {
+          this.zoom.tx += curRoot.x - this._panRootStart.x;
+          this.zoom.ty += curRoot.y - this._panRootStart.y;
+          this._applyZoom();
+        }
         this._panRootStart = curRoot;
-        this._applyZoom();
       } else if (pointers.size >= 2) {
         this._updatePinch();
       }
@@ -1685,21 +1727,22 @@ class RigView {
         outline.setAttribute("class", "part-outline");
         outline.style.opacity = 0;
         poseGroup.appendChild(outline);
-        // Precompute a per-part "stretch axis" from the part's OWN real
-        // rendered geometry (bbox center relative to its real pivot) --
-        // used only for the synthetic gap-masking stretch effect in
-        // matWithRotationAroundPivot (see its own note): a direction
-        // derived from real local art, even though the stretch amount
-        // itself is an invented rendering nicety, not real file data.
-        const cx = bbox.x + bbox.width / 2, cy = bbox.y + bbox.height / 2;
-        const dx = cx - part.pivot[0], dy = cy - part.pivot[1];
-        const len = Math.hypot(dx, dy);
-        part.stretchAxis = len > 1e-6 ? { x: dx / len, y: dy / len } : { x: 0, y: 1 };
       } catch (e) { /* empty content (e.g. an all-mask part) -- no outline */ }
       this.outlineRects[part.name] = outline;
 
       this.partGroups[part.name] = poseGroup;
       this.viewGroup.appendChild(poseGroup);
+    }
+
+    // Precompute each part's DIRECT CHILDREN's real joint points, expressed
+    // in THIS part's own local space (via the child's real REST matrix --
+    // a fixed point, never changes with posing) -- used only by the
+    // synthetic stretch effect (`matStretchLocal`'s own note) so a parent
+    // can also grow near a joint as its child swings, not just the child.
+    for (const part of this.rig.parts) {
+      part.childJoints = this.rig.parts
+        .filter((c) => c.parent === part.name)
+        .map((c) => ({ child: c, point: applyMatToPoint(c.matrix, { x: c.pivot[0], y: c.pivot[1] }) }));
     }
 
     // Onion-skin ghosts (a faint copy of the neighboring keyframes' real
@@ -1784,8 +1827,7 @@ class RigView {
         // on top of the CLEAN world matrix only for this rendered group's
         // transform -- pose[name] itself (used for the bone overlay above,
         // decompose, undo, export) never sees it.
-        const curAngle = matDecomposeRotation(this.pose[part.name] || part.matrix);
-        const stretchMat = matStretchLocal(part, curAngle);
+        const stretchMat = matStretchLocal(part, this.pose);
         g.setAttribute("transform", matToStr(matCompose(wm, stretchMat)));
       }
     }
@@ -2137,6 +2179,7 @@ $("loadRigBtn").addEventListener("click", () => {
     mainView.setMode(document.querySelector('#modeToggle input[name="editMode"]:checked').value);
     mainView.setSnapRotation($("snapChk").checked);
     mainView.setOnionSkin($("onionChk").checked);
+    mainView.setPanEnabled($("panChk").checked);
     mainView.onHistoryChange = updateUndoRedoButtons;
     currentFrame = 0;
     $("frameNum").value = 0;
@@ -2322,6 +2365,9 @@ $("showBonesChk").addEventListener("change", () => {
 });
 $("onionChk").addEventListener("change", () => {
   if (mainView) mainView.setOnionSkin($("onionChk").checked);
+});
+$("panChk").addEventListener("change", () => {
+  if (mainView) mainView.setPanEnabled($("panChk").checked);
 });
 $("snapChk").addEventListener("change", () => {
   if (mainView) mainView.setSnapRotation($("snapChk").checked);
