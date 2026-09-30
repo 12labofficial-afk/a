@@ -506,6 +506,83 @@ manual posing is allowed to exceed the original rig's own limits, since
 the human is explicitly overriding it here -- but the note makes that an
 informed choice, not a silent one).
 
+### Real bug: joint dots/bone lines and rotation itself used the wrong anchor point
+
+Reported as "rigging toh body parts ke upar ki hui hai... hamari html file
+mein toh vaisa hai hi nahi" (in the real reference the rig sits ON the
+body parts; ours didn't). Root cause: every joint dot, bone-line endpoint,
+and the CENTER OF ROTATION during a drag all assumed a part's real joint
+sits at its own local origin (0,0), i.e. wherever the world matrix's raw
+translation (`wm[4], wm[5]`) places it. False for many real parts -- the
+artist's actual registration point is the file's own real
+`transformationPoint`, already extracted per part into `part.pivot` by
+`instancePivot()` but never actually used anywhere until now. Verified by
+direct visual A/B, not by guessing: overlaying both the origin's world
+position (red dots) and the pivot's world position (green dots) on the
+same real render (`RAJ  BHAI`) showed green landing exactly on the real
+neck/shoulder/elbow/wrist/hip/knee/ankle joints across the WHOLE
+character, while red floated off the body entirely for several parts
+(e.g. one leg joint sitting in empty space beside the leg, the head joint
+floating above the hair).
+
+Fixed in the standalone editor's `ui.js`/`app.js`:
+- `matWithRotation(m, angleDeg)` (always rotated around local origin) was
+  replaced outright with `matWithRotationAroundPivot(m, pivot, angleDeg)`,
+  which rotates while keeping a GIVEN local point's WORLD position fixed.
+  Reduces exactly to the old behavior when `pivot=(0,0)`, confirming it's
+  a correct generalization, not a new/different formula.
+- The drag handlers (`_onPointerDown`/`_onPointerMove`) now track the
+  rotation angle relative to `part.pivot` (transformed into the parent's
+  local frame), not the part's local origin, and call
+  `matWithRotationAroundPivot(startLocal, part.pivot, targetDeg)`.
+- The rotation slider and the arrow-key nudge handler (both in `app.js`)
+  now look up the selected part's real pivot and pass it through the same
+  way -- three call sites total, all updated together (a partial update
+  would have been a real regression, since the old function was deleted,
+  not kept alongside the new one).
+- `updateTransforms()` now positions every joint dot and bone-line
+  endpoint (and the bone-arrow midpoint/angle) via
+  `applyMatToPoint(worldMatrix, part.pivot)` instead of the raw
+  `wm[4], wm[5]` translation.
+
+Verified after the fix: re-ran the full existing regression suite
+(drag/keyframe/export, retarget, move-mode `.fla`/`.ana` round-trips, JSON
+import, zoom/undo/redo, timeline/onion/snap/nudge, rotation-direction
+sweep tests) with zero behavior changes other than the anchor point
+itself, then re-captured the same overlay screenshots against the
+ACTUAL shipped file -- every joint now sits precisely on real anatomy.
+
+### Mobile: Timeline moved out of the sidebar, right under the stage
+
+Reported: "keyframe vagera jo h usko vaisa karo ki mobile screen pe baar
+baaar scroll na karna pade vahi par animation karke mai kaam saku" (don't
+make me scroll back and forth for keyframe controls -- let me animate
+right there at the stage). Root cause: the Timeline panel (frame number,
+Keyframe Record, Play/Stop, keyframe chip list) lived at the BOTTOM of
+`.sidebar`, after the Parts list and the Rig Export panel -- and on
+mobile, `.editor-layout`'s grid collapses to one column, so the sidebar
+renders entirely BELOW the stage. Posing a part (drag on stage) and then
+recording a keyframe for it meant scrolling down past the stage, then
+further down past Parts and Export, hitting Record, then scrolling all
+the way back up to see the character again for the next pose -- on every
+single keyframe.
+
+Fixed by moving the whole Timeline `<div>` out of `.sidebar` and into the
+SAME grid column as the stage, directly after `.stage-wrap`'s closing tag
+(`frontend/rig_editor_standalone.html`, inside `.editor-layout`). This is
+a pure DOM relocation -- every element id is unchanged and none are
+duplicated, so no JS needed to change. Effect: on desktop (2-column grid)
+Timeline now sits right under the stage instead of at the bottom of a
+separate sidebar column, which is also the more natural pairing (posing
+and keyframing are one continuous action); on mobile (1-column collapse)
+Timeline is now the very next thing after the stage -- measured directly
+in a real mobile-viewport (390x844) browser test: 12px gap from the
+bottom of the stage to the top of the Timeline panel, versus ~368px down
+to where the Parts/Export sidebar now starts. Parts list, the
+selected-part panel (rotation slider, reparent), and Rig Export stayed in
+`.sidebar` -- they're secondary to the pose-then-keyframe loop the
+complaint was actually about.
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes

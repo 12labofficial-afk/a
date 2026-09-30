@@ -177,32 +177,12 @@
           <div class="stage-wrap">
             <svg id="stageSvg" viewBox="-300 -900 700 1100" preserveAspectRatio="xMidYMid meet"></svg>
           </div>
-        </div>
-        <div class="sidebar">
-          <div>
-            <h2 style="margin-bottom:4px;">Parts</h2>
-            <p class="hint" id="dragHint">Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Poore character ko move karne ke liye root part (jiska koi parent na ho) ko drag karo.</p>
-            <ul class="part-list" id="partList"></ul>
-          </div>
-          <div class="selected-panel" id="selectedPanel" style="display:none;">
-            <div id="selName" style="font-weight:700; margin-bottom:6px;"></div>
-            <label>Parent</label>
-            <select id="parentPick"></select>
-            <label style="margin-top:8px;">Rotation</label>
-            <input type="range" id="rotSlider" min="-180" max="180" value="0" step="1" />
-            <div class="lock-note" id="lockNote" style="display:none;">Is bone ka rotation asli rig mein disabled hai (rotationEnabled="false") -- slider phir bhi kaam karega, par original file isko rotate nahi karti thi.</div>
-            <button class="small secondary" id="resetPoseBtn">Is part ka pose reset karo</button>
-          </div>
-          <div class="selected-panel">
-            <h2 style="margin-bottom:4px;">Rig Export</h2>
-            <p class="hint">"Move Parts" mode mein parts ko bones pe sahi se attach karne ke baad (ya kabhi bhi), current corrected rig ko real file mein wapas save kar lo -- usi ko baad mein dubara upload kar sakte ho.</p>
-            <div class="row" style="gap:8px;">
-              <button class="small" id="exportFlaBtn" style="flex:1;">&#11015; .fla Export</button>
-              <button class="small" id="exportAnaBtn" style="flex:1;">&#11015; .ana Export</button>
-            </div>
-            <div class="hint" id="exportAnaNote" style="display:none; margin-top:4px;">.ana export sirf tab milta hai jab original upload ek .ana bundle ho (seedhi .fla upload ke liye sirf .fla export use karo).</div>
-          </div>
-          <div class="selected-panel">
+          <!-- Timeline sits right under the stage (same column, both desktop
+               and the single-column mobile layout) on purpose -- posing a
+               part on the stage and recording a keyframe for it are one
+               continuous action, so keyframe/frame/play controls must never
+               be a separate scroll away in the Parts/Export sidebar. -->
+          <div class="selected-panel" id="timelinePanel" style="margin-top:12px;">
             <h2 style="margin-bottom:4px;">Timeline</h2>
             <div class="tl-strip" id="tlStrip">
               <div class="tl-track" id="tlTrack">
@@ -229,6 +209,31 @@
               <label>Pehle ki animation JSON load karo (isi character pe)</label>
               <input type="file" id="loadAnimJsonFile" accept=".json" />
             </div>
+          </div>
+        </div>
+        <div class="sidebar">
+          <div>
+            <h2 style="margin-bottom:4px;">Parts</h2>
+            <p class="hint" id="dragHint">Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Poore character ko move karne ke liye root part (jiska koi parent na ho) ko drag karo.</p>
+            <ul class="part-list" id="partList"></ul>
+          </div>
+          <div class="selected-panel" id="selectedPanel" style="display:none;">
+            <div id="selName" style="font-weight:700; margin-bottom:6px;"></div>
+            <label>Parent</label>
+            <select id="parentPick"></select>
+            <label style="margin-top:8px;">Rotation</label>
+            <input type="range" id="rotSlider" min="-180" max="180" value="0" step="1" />
+            <div class="lock-note" id="lockNote" style="display:none;">Is bone ka rotation asli rig mein disabled hai (rotationEnabled="false") -- slider phir bhi kaam karega, par original file isko rotate nahi karti thi.</div>
+            <button class="small secondary" id="resetPoseBtn">Is part ka pose reset karo</button>
+          </div>
+          <div class="selected-panel">
+            <h2 style="margin-bottom:4px;">Rig Export</h2>
+            <p class="hint">"Move Parts" mode mein parts ko bones pe sahi se attach karne ke baad (ya kabhi bhi), current corrected rig ko real file mein wapas save kar lo -- usi ko baad mein dubara upload kar sakte ho.</p>
+            <div class="row" style="gap:8px;">
+              <button class="small" id="exportFlaBtn" style="flex:1;">&#11015; .fla Export</button>
+              <button class="small" id="exportAnaBtn" style="flex:1;">&#11015; .ana Export</button>
+            </div>
+            <div class="hint" id="exportAnaNote" style="display:none; margin-top:4px;">.ana export sirf tab milta hai jab original upload ek .ana bundle ho (seedhi .fla upload ke liye sirf .fla export use karo).</div>
           </div>
         </div>
       </div>
@@ -1345,18 +1350,35 @@ function analyzeTimelineLayers(layers) {
 // ---- matrix helpers for pose editing (same convention as engine.js's
 // matCompose/matInverse, plus rotation decompose/apply for the UI) ----
 function matDecomposeRotation(m) { return Math.atan2(m[1], m[0]) * 180 / Math.PI; }
-function matWithRotation(m, angleDeg) {
-  const [a, b, c, d] = m;
+function matToStr(m) { return `matrix(${m[0]},${m[1]},${m[2]},${m[3]},${m[4]},${m[5]})`; }
+function applyMatToPoint(m, pt) { return { x: m[0] * pt.x + m[2] * pt.y + m[4], y: m[1] * pt.x + m[3] * pt.y + m[5] }; }
+
+// Rotates a part's matrix to an absolute angle while keeping a given LOCAL
+// point's WORLD position fixed. Real bug this fixes: the original version
+// (no pivot argument, rotation always fixed the LOCAL ORIGIN (0,0) instead)
+// implicitly assumed a part's visual joint sits at its own local origin --
+// verified false by direct comparison on a real file: overlaying both the
+// origin's and the real transformationPoint pivot's world positions on the
+// same render, the pivot landed exactly on the real anatomical joints
+// (neck, shoulder, elbow, hip, knee) while the origin floated off the body
+// entirely for several parts (e.g. above the hair, beside the leg). Every
+// real part already carries this real, artist-set pivot (`part.pivot`,
+// extracted from the file's own transformationPoint but previously never
+// used) -- passing (0,0) here reproduces the old, wrong behavior exactly,
+// which is why it's a required argument, not a default.
+function matWithRotationAroundPivot(m, pivot, angleDeg) {
+  const [a, b, c, d, tx, ty] = m;
   const scaleX = Math.hypot(a, b) || 1;
   const scaleY = Math.hypot(c, d) || 1;
   const mirrored = (a * d - b * c) < 0 ? -1 : 1;
   const rad = angleDeg * Math.PI / 180;
   const na = scaleX * Math.cos(rad), nb = scaleX * Math.sin(rad);
   const nc = -mirrored * scaleY * Math.sin(rad), nd = mirrored * scaleY * Math.cos(rad);
-  return [na, nb, nc, nd, m[4], m[5]];
+  const [px, py] = pivot;
+  const oldWorldPivot = { x: a * px + c * py + tx, y: b * px + d * py + ty };
+  const newLinearOnPivot = { x: na * px + nc * py, y: nb * px + nd * py };
+  return [na, nb, nc, nd, oldWorldPivot.x - newLinearOnPivot.x, oldWorldPivot.y - newLinearOnPivot.y];
 }
-function matToStr(m) { return `matrix(${m[0]},${m[1]},${m[2]},${m[3]},${m[4]},${m[5]})`; }
-function applyMatToPoint(m, pt) { return { x: m[0] * pt.x + m[2] * pt.y + m[4], y: m[1] * pt.x + m[3] * pt.y + m[5] }; }
 
 // Sibling elements within one <elements> block keep real file order (first
 // = back-most, last = front-most -- plain SVG native order; only DOMLayer
@@ -1684,26 +1706,35 @@ class RigView {
     // the earlier nested-group version, there's no per-part compounded
     // scale left to correct for.
     const worldMats = {};
+    const jointWorld = {};
     for (const part of this.rig.parts) {
       const wm = this.worldMatrix(part.name);
       worldMats[part.name] = wm;
+      // The real joint (dot position, bone-line endpoint) is the part's
+      // real transformationPoint pivot mapped into world space -- NOT the
+      // raw world-matrix translation (wm[4],wm[5]), which is only the
+      // local ORIGIN and, for many real parts, sits nowhere near the
+      // actual anatomical joint (verified by direct visual A/B comparison
+      // on a real file: the pivot lands on the neck/shoulder/elbow/hip/
+      // knee, the origin floats off the body for several parts).
+      jointWorld[part.name] = applyMatToPoint(wm, { x: part.pivot[0], y: part.pivot[1] });
       const g = this.partGroups[part.name];
       if (g) g.setAttribute("transform", matToStr(wm));
     }
     const dotR = this._dotRadius();
     for (const part of this.rig.parts) {
-      const wm = worldMats[part.name];
+      const jw = jointWorld[part.name];
       const dot = this.jointDots[part.name];
-      if (dot) { dot.setAttribute("cx", wm[4]); dot.setAttribute("cy", wm[5]); dot.setAttribute("r", dotR); }
+      if (dot) { dot.setAttribute("cx", jw.x); dot.setAttribute("cy", jw.y); dot.setAttribute("r", dotR); }
       const line = this.boneLines[part.name];
       if (line && part.parent) {
-        const pm = worldMats[part.parent];
-        line.setAttribute("x1", pm[4]); line.setAttribute("y1", pm[5]);
-        line.setAttribute("x2", wm[4]); line.setAttribute("y2", wm[5]);
+        const pj = jointWorld[part.parent];
+        line.setAttribute("x1", pj.x); line.setAttribute("y1", pj.y);
+        line.setAttribute("x2", jw.x); line.setAttribute("y2", jw.y);
         const arrow = this.boneArrows[part.name];
         if (arrow) {
-          const mx = (pm[4] + wm[4]) / 2, my = (pm[5] + wm[5]) / 2;
-          const angleDeg = Math.atan2(wm[5] - pm[5], wm[4] - pm[4]) * 180 / Math.PI;
+          const mx = (pj.x + jw.x) / 2, my = (pj.y + jw.y) / 2;
+          const angleDeg = Math.atan2(jw.y - pj.y, jw.x - pj.x) * 180 / Math.PI;
           const s = dotR * 0.9;
           arrow.setAttribute("points", `${s},0 ${-s * 0.6},${s * 0.7} ${-s * 0.6},${-s * 0.7}`);
           arrow.setAttribute("transform", `translate(${mx},${my}) rotate(${angleDeg})`);
@@ -1798,22 +1829,28 @@ class RigView {
     const startLocal = this.pose[name].slice();
     // A real bone's joint (where it attaches to its parent) never moves --
     // only the ANGLE at that joint changes. Dragging a part with a real
-    // parent therefore only ever rotates it around its own local origin
-    // (translation in startLocal[4],[5] is left untouched, forever), which
-    // is what guarantees it can never visually detach from its parent no
-    // matter how far the pointer moves. A part with no parent (the rig's
-    // own root) has no joint to preserve, so it still free-translates --
-    // that's how the whole character gets repositioned on stage.
+    // parent therefore only ever rotates it around its own real joint --
+    // its real transformationPoint pivot (`part.pivot`), NOT its local
+    // origin (0,0): verified on a real file that the pivot lands exactly
+    // on the actual anatomical joints (neck, shoulder, elbow, hip, knee)
+    // while the origin floats off the body entirely for several parts.
+    // Whichever point is used, it's kept fixed forever during the drag,
+    // which is what guarantees a part can never visually detach from its
+    // parent no matter how far the pointer moves. A part with no parent
+    // (the rig's own root) has no joint to preserve, so it still free-
+    // translates -- that's how the whole character gets repositioned.
     // "move" mode is rig calibration, not posing -- always a free drag
     // (there's no joint to protect; the human is deliberately re-anchoring
     // the art). "animate" mode keeps the joint-preserving rotate-only
     // behavior (rotate for anything with a real parent, free-translate
     // only for a parentless root, so the whole character can be placed).
     const mode = this.editMode === "move" ? "translate" : (part.parent ? "rotate" : "translate");
+    const pivot = part.pivot;
+    const pivotInParentFrame = applyMatToPoint(startLocal, { x: pivot[0], y: pivot[1] });
     const startLocalPoint = applyMatToPoint(parentInv, start);
-    const startAngle = Math.atan2(startLocalPoint.y - startLocal[5], startLocalPoint.x - startLocal[4]);
+    const startAngle = Math.atan2(startLocalPoint.y - pivotInParentFrame.y, startLocalPoint.x - pivotInParentFrame.x);
     const startRotationDeg = matDecomposeRotation(startLocal);
-    this.dragState = { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg };
+    this.dragState = { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg, pivot, pivotInParentFrame };
     try { targetEl.setPointerCapture(evt.pointerId); } catch (e) { /* best-effort only, see _wireZoomPan's note */ }
     const move = (e) => this._onPointerMove(e);
     const up = () => {
@@ -1828,7 +1865,7 @@ class RigView {
 
   _onPointerMove(evt) {
     if (!this.dragState) return;
-    const { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg } = this.dragState;
+    const { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg, pivot, pivotInParentFrame } = this.dragState;
     const cur = this.localPoint(evt);
     if (mode === "translate") {
       const d0 = applyMatToPoint(parentInv, start);
@@ -1838,14 +1875,14 @@ class RigView {
       this.pose[name] = m;
     } else {
       const curLocalPoint = applyMatToPoint(parentInv, cur);
-      const curAngle = Math.atan2(curLocalPoint.y - startLocal[5], curLocalPoint.x - startLocal[4]);
+      const curAngle = Math.atan2(curLocalPoint.y - pivotInParentFrame.y, curLocalPoint.x - pivotInParentFrame.x);
       const deltaDeg = (curAngle - startAngle) * 180 / Math.PI;
       // Shift held (desktop) or the "15° Snap" toggle (touch, no Shift key)
       // rounds to Adobe-style 15-degree steps -- same idea as Animate's
       // own Free Transform constrain-angle behavior.
       let targetDeg = startRotationDeg + deltaDeg;
       if (this.snapRotation || evt.shiftKey) targetDeg = Math.round(targetDeg / 15) * 15;
-      this.pose[name] = matWithRotation(startLocal, targetDeg);
+      this.pose[name] = matWithRotationAroundPivot(startLocal, pivot, targetDeg);
     }
     this.updateTransforms();
     if (this.onPoseChange) this.onPoseChange();
@@ -1957,7 +1994,6 @@ class RigView {
     return missing;
   }
 }
-
 </script>
 <script>
 // ---------------------------------------------------------------------------
@@ -2082,7 +2118,8 @@ $("rotSlider").addEventListener("input", () => {
   if (!mainView.selectedPart) return;
   if (!rotSliderPushed) { mainView.pushHistory(); rotSliderPushed = true; }
   const m = mainView.pose[mainView.selectedPart];
-  mainView.pose[mainView.selectedPart] = matWithRotation(m, parseFloat($("rotSlider").value));
+  const part = mainView.rig.parts.find((p) => p.name === mainView.selectedPart);
+  mainView.pose[mainView.selectedPart] = matWithRotationAroundPivot(m, part.pivot, parseFloat($("rotSlider").value));
   mainView.updateTransforms();
   if (mainView.editMode === "move") mainView._commitBase(mainView.selectedPart);
 });
@@ -2223,8 +2260,9 @@ window.addEventListener("keydown", (evt) => {
   // stack with one entry per repeat tick instead of one per gesture.
   if (!evt.repeat) mainView.pushHistory();
   const m = mainView.pose[mainView.selectedPart];
+  const part = mainView.rig.parts.find((p) => p.name === mainView.selectedPart);
   const newDeg = matDecomposeRotation(m) + delta;
-  mainView.pose[mainView.selectedPart] = matWithRotation(m, newDeg);
+  mainView.pose[mainView.selectedPart] = matWithRotationAroundPivot(m, part.pivot, newDeg);
   mainView.updateTransforms();
   if (mainView.editMode === "move") mainView._commitBase(mainView.selectedPart);
   $("rotSlider").value = Math.round(newDeg);
@@ -2404,7 +2442,6 @@ $("retargetStopBtn").addEventListener("click", () => {
   $("retargetPlayBtn").style.display = "inline-block";
   $("retargetStopBtn").style.display = "none";
 });
-
 </script>
 </body>
 </html>
