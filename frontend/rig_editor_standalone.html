@@ -1479,7 +1479,8 @@ class RigView {
     this.pose = {};
     this.keyframes = [];
     this.selectedPart = null;
-    this.partGroups = {}; // name -> pose <g> (has the live transform)
+    this.partGroups = {}; // name -> the REAL (undilated) content <g>, has data-part + the live world transform
+    this.fillerGroups = {}; // name -> a second, cosmetic-only copy behind it, gets world+stretch (see matStretchLocal's note)
     this.outlineRects = {}; // name -> selection <rect>
     this.jointDots = {}; // name -> <circle> at that part's own world origin
     this.boneLines = {}; // childName -> <line> from parent origin to child origin
@@ -1692,6 +1693,7 @@ class RigView {
   _buildDom() {
     this.svgEl.innerHTML = "";
     this.partGroups = {};
+    this.fillerGroups = {};
     this.outlineRects = {};
     this.jointDots = {};
     this.boneLines = {};
@@ -1707,17 +1709,18 @@ class RigView {
     this.svgEl.appendChild(this.viewGroup);
 
     const byPaintOrder = this.rig.parts.slice().sort((a, b) => a.paintOrder - b.paintOrder);
+    let clipIdCounter = 0;
     for (const part of byPaintOrder) {
       const poseGroup = document.createElementNS(SVG_NS, "g");
+
       const contentGroup = document.createElementNS(SVG_NS, "g");
       contentGroup.setAttribute("data-part", part.name);
       contentGroup.style.cursor = "grab";
       contentGroup.append(...part.svgBody.map((n) => n.cloneNode(true)));
-      poseGroup.appendChild(contentGroup);
 
-      let outline;
+      let outline, bbox = null;
       try {
-        const bbox = contentGroup.getBBox();
+        bbox = contentGroup.getBBox();
         outline = document.createElementNS(SVG_NS, "rect");
         const pad = Math.max(bbox.width, bbox.height) * 0.04 + 2;
         outline.setAttribute("x", bbox.x - pad);
@@ -1726,11 +1729,49 @@ class RigView {
         outline.setAttribute("height", bbox.height + 2 * pad);
         outline.setAttribute("class", "part-outline");
         outline.style.opacity = 0;
-        poseGroup.appendChild(outline);
+        // A child of contentGroup (not poseGroup) so it inherits exactly
+        // contentGroup's own (undilated) transform, set independently of
+        // fillerGroup's in updateTransforms().
+        contentGroup.appendChild(outline);
       } catch (e) { /* empty content (e.g. an all-mask part) -- no outline */ }
       this.outlineRects[part.name] = outline;
 
-      this.partGroups[part.name] = poseGroup;
+      // The cosmetic stretch (matStretchLocal's own note) is a plain
+      // isotropic dilation -- it grows a part in EVERY direction from its
+      // joint. Left unclipped, that grows the FAR end too (e.g. a hand at
+      // the end of an outstretched arm visibly bigger, which is obviously
+      // wrong -- reported directly: "size badha rahe ho... sahi nahi h").
+      // A single affine matrix can't express "grows only near the joint,
+      // true size at the far end" -- that needs real per-vertex/mesh
+      // deformation, which these rigs do not have. Faked instead with TWO
+      // copies of the same real art PLUS a real clip: `fillerGroup`
+      // (dilated, rendered BEHIND, clipped to a circle centered on the
+      // part's own real pivot) exists purely to peek out through that
+      // clip and cover a real gap right at the joint; `contentGroup` (the
+      // REAL, undilated size, unclipped) renders on top and covers its
+      // own true silhouette completely, so nothing about the part's own
+      // far end/size ever visibly changes -- only the joint-adjacent
+      // sliver the clip permits can ever show the dilated copy at all.
+      const fillerGroup = document.createElementNS(SVG_NS, "g");
+      fillerGroup.style.pointerEvents = "none";
+      fillerGroup.append(...part.svgBody.map((n) => n.cloneNode(true)));
+      if (bbox) {
+        const clipId = `stretch-clip-${clipIdCounter++}`;
+        const clipPath = document.createElementNS(SVG_NS, "clipPath");
+        clipPath.setAttribute("id", clipId);
+        const circle = document.createElementNS(SVG_NS, "circle");
+        circle.setAttribute("cx", part.pivot[0]);
+        circle.setAttribute("cy", part.pivot[1]);
+        circle.setAttribute("r", Math.max(bbox.width, bbox.height) * 0.45);
+        clipPath.appendChild(circle);
+        defsEl.appendChild(clipPath);
+        fillerGroup.setAttribute("clip-path", `url(#${clipId})`);
+      }
+
+      poseGroup.appendChild(fillerGroup);
+      poseGroup.appendChild(contentGroup);
+      this.fillerGroups[part.name] = fillerGroup;
+      this.partGroups[part.name] = contentGroup;
       this.viewGroup.appendChild(poseGroup);
     }
 
@@ -1821,14 +1862,19 @@ class RigView {
       // on a real file: the pivot lands on the neck/shoulder/elbow/hip/
       // knee, the origin floats off the body for several parts).
       jointWorld[part.name] = applyMatToPoint(wm, { x: part.pivot[0], y: part.pivot[1] });
+      // The REAL content (this.partGroups) always renders at its true,
+      // undilated size -- pose[name]/wm only, exactly what the file
+      // actually authored. The cosmetic stretch (matStretchLocal's own
+      // note) goes ONLY on the separate fillerGroup behind it, so a part
+      // can grow near its joint to mask a seam without the part's own far
+      // end (e.g. a hand on an outstretched arm) ever appearing bigger
+      // than its real size -- the real copy on top always covers it.
       const g = this.partGroups[part.name];
-      if (g) {
-        // The cosmetic stretch (see matStretchLocal's own note) is composed
-        // on top of the CLEAN world matrix only for this rendered group's
-        // transform -- pose[name] itself (used for the bone overlay above,
-        // decompose, undo, export) never sees it.
+      if (g) g.setAttribute("transform", matToStr(wm));
+      const filler = this.fillerGroups[part.name];
+      if (filler) {
         const stretchMat = matStretchLocal(part, this.pose);
-        g.setAttribute("transform", matToStr(matCompose(wm, stretchMat)));
+        filler.setAttribute("transform", matToStr(matCompose(wm, stretchMat)));
       }
     }
     const dotR = this._dotRadius();

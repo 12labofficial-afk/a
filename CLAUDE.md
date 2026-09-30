@@ -756,6 +756,42 @@ negotiable for the rewrite -- re-ran the full regression suite after each
 version and the snap-angle test is back to exactly 15° with the dilation
 approach too.
 
+**Second regression, reported straight back with a screenshot**: "Tum
+size badha rahe ho body parts ka jo ki sahi nahi h bilkul bhi" (you're
+growing body parts' size, that's not right at all) -- an arm rotated far
+out to the side (a wave/dab pose) showed a visibly BIGGER hand at the far
+end. Root cause: isotropic dilation, by definition, scales a part in
+EVERY direction from its pivot -- so a point at distance D from the pivot
+moves to distance D*(1+k), meaning the ABSOLUTE displacement is actually
+LARGEST at points FARTHEST from the joint (the hand, at the far end of
+the arm), the exact opposite falloff of what a seam fix needs (zero
+effect far from the joint, concentrated right at it). The child+parent
+dual-dilation from the first fix didn't cause this on its own; growing
+the WHOLE shape uniformly did.
+
+Fixed by keeping the dilation itself (still needed to close the real
+gap) but confining WHERE it's allowed to show, via a real SVG clip rather
+than trying to taper the math (a single affine matrix can't express a
+distance-based falloff -- that needs true per-vertex deformation, which
+these rigs don't have). Each part now renders as TWO stacked copies of
+the exact same real art: `fillerGroup` (gets the dilated `matStretchLocal`
+transform, rendered BEHIND, `pointer-events: none`) is clipped to a
+`<clipPath>` circle centered on the part's own real pivot, radius `0.45 *
+max(bbox.width, bbox.height)` (computed once per part in `_buildDom`, in
+the SAME raw local coordinate space the pivot and clip circle both live
+in, so the clip stays correctly anchored regardless of the group's own
+transform); `partGroups[name]` (renamed from meaning the outer pose group
+to meaning THIS real, undilated content group specifically) renders on
+TOP at its true size and fully covers its own real silhouette everywhere
+except the small clipped sliver right at the joint, where the dilated
+filler underneath is now the only thing that can ever show through.
+Net effect: the seam-closing bulge still happens right at the joint, but
+a part's own far end (hand, foot) can never look bigger than its real
+size, because the real, correctly-sized copy is what's drawn on top of it
+everywhere else. Verified by re-screenshotting both cases: the same
+outstretched arm now shows a normal-sized hand, and the same 130°-bent
+knee still fully closes its gap.
+
 ### Single-finger pan now needs an explicit toggle (default OFF)
 
 Referencing the same competitor app's screenshot: it gates its own
