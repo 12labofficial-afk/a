@@ -819,6 +819,95 @@ leaves `zoom.tx/ty` byte-for-byte unchanged; the same drag after checking
 it moves the view as expected; pinch-zoom continues to work regardless
 of the checkbox state.
 
+### Universal bone roles + cross-character retarget + extracting a keyframe animation OUT OF an existing real timeline
+
+Asked for a big pipeline: attach a "human" bone set to ANY character
+(even one with no real `<IKTree>`), play whatever real animation the file
+already has, and turn that into a keyframe JSON usable on ANY OTHER
+character. Built in three real, separately-verified pieces -- nothing
+here invents an angle or a mapping; every piece only re-expresses REAL
+authored matrices already in the file.
+
+1. **`part.role`** -- an optional, human-assigned free-text tag (a `Role`
+   field in the selected-part panel, `<datalist id="roleSuggestions">`
+   with common suggestions like `upper_leg_L`/`torso`/`head`, never
+   auto-guessed) carried into `exportJson()`'s `parts[]` alongside
+   `name`/`parent`/`base_matrix`. Exactly like manual parent-assignment
+   when there's no real IK tree, this is a human decision, never inferred
+   from the part's name -- two characters' real parts are almost never
+   named the same way (`Left_leg` vs `UP LEG L`), so only a human-assigned
+   shared vocabulary can bridge them honestly.
+
+2. **`applyAnimationJson` rewritten to be ROTATION-RELATIVE, name-then-role
+   matched.** The old version matched by exact name only and copied the
+   source's raw pose matrix -- which only ever looked right because
+   RAJ BHAI and rajuuu happen to be the exact same rig re-exported (same
+   rest matrices). For two genuinely different characters this would
+   misplace every part (different proportions -> different rest
+   matrices). Fixed: for each source part, decompose its keyframe matrix's
+   rotation relative to that SAME part's own `base_matrix` (both travel
+   together in the JSON) to get a real angle DELTA, look up the target
+   part by exact name first, falling back to a role match ONLY when
+   exactly one target part shares that source part's role (two parts
+   sharing a role is treated as ambiguous and never guessed at), then
+   reapply that same delta on top of the TARGET part's own real rest angle
+   via `matWithRotationAroundPivot`. Verified two ways: the existing
+   same-naming JSON-reload regression test still passes bit-for-bit
+   (confirms the rewrite is a strict generalization, not a behavior
+   change, when rests already match), and a new direct cross-character
+   test -- tagged rajuuu's `UP LEG` and Motu Sheth's completely
+   differently-named, completely different-proportioned `Right_leg` both
+   `upper_leg_R`, rotated rajuuu's part +30° and recorded a keyframe,
+   exported, applied that JSON onto the loaded Motu Sheth rig -- and
+   `Right_leg` picked up the exact same +30° delta relative to ITS OWN
+   rest angle, while every other, unrelated part correctly reported as
+   unmatched (never guessed).
+
+3. **`extractTimelineKeyframes` (engine.js) + `RigView.applyExtractedTimeline`**
+   -- pulls real rotation-over-time out of an EXISTING, already-authored
+   timeline elsewhere in the same project (e.g. a real walk-cycle symbol)
+   and turns it into a keyframe sequence for the CURRENTLY loaded rig.
+   Matches that timeline's own layers to the loaded rig's real parts by
+   name, tolerant of Animate's own real duplication convention
+   (`normalizePartBaseName` strips a `Duplicate Items Folder/` prefix and
+   a trailing `copy`/`copy N`, so "Left leg copy 4" is recognized as the
+   same real part as "Left leg"). For each matched layer, reads every real
+   `<DOMFrame>`'s own `<Matrix>`, decomposes rotation relative to that
+   layer's OWN first real keyframe, and records it. If a later keyframe's
+   `libraryItemName` differs from the first (the real ART changed, not
+   just its matrix -- can't be honestly expressed as a rotation of the
+   same shape), that frame is skipped and reported as a warning rather
+   than silently faked. Verified end-to-end on Motu Sheth's real file: a
+   fresh Python-side inspection of the raw XFL (working around the same
+   EOCD-54-byte quirk) confirmed its `Duplicate Items Folder/Left leg copy 4`
+   symbol really does hold real per-keyframe matrices at frames 0,4,9,14,19
+   (identity, identity, ~54° rotation, identity, identity) -- and
+   `extractTimelineKeyframes` against "Duplicate Items Folder/Mukhiya
+   copy 2" reproduced exactly those same 5 frame indices with all 6 real
+   parts matched by name.
+
+   **Real, honestly-reported limitation found while verifying, not
+   glossed over**: comparing the extraction's reapplied render against a
+   direct render of the SAME original timeline at the SAME frames (both
+   through `renderTimeline`, side by side) showed the extraction capturing
+   only COARSE, whole-part motion correctly -- some of Motu Sheth's real
+   parts (its legs, confirmed directly: `Right leg copy 4` is itself a
+   2-layer symbol, thigh + calf, each with its OWN real per-frame
+   rotation one level DEEPER than the wrapper instance `Mukhiya copy 2`
+   places) encode FINER articulation (a real knee bend, and separately a
+   talking mouth/eyebrow animation nested inside `Face`) via a SECOND,
+   NESTED level of real per-frame matrices that the current extraction
+   does not recurse into -- it reads the outer wrapper's own rotation only,
+   the same depth `extractCharacterParts` already works at everywhere
+   else in this tool. For a character whose whole-limb motion is encoded
+   at that single outer level (e.g. rajuuu/RAJ BHAI-style rigs, and
+   Motu Sheth's own hands/legs at the COARSE level), extraction is
+   accurate; for nested secondary articulation inside a `loop`-based
+   sub-symbol (this specific file's knees and facial expression), it is
+   not yet captured, and recursing into that would be a real follow-up
+   piece of work, not a quick fix -- said so plainly rather than silently
+   shipping an incomplete capture as if it were complete.
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes

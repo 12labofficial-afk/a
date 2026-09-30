@@ -222,6 +222,26 @@
             <div id="selName" style="font-weight:700; margin-bottom:6px;"></div>
             <label>Parent</label>
             <select id="parentPick"></select>
+            <label style="margin-top:8px;">Role (universal bone tag -- optional)</label>
+            <input list="roleSuggestions" id="rolePick" placeholder="jaise upper_leg_L" />
+            <p class="hint" style="margin-top:2px;">Sirf tab zaroori hai jab kisi ALAG naam wale character pe animation retarget karni ho (jaise is rig ka "Left_leg" us doosre rig ke "UP LEG L" se match karna ho) -- same-naming characters ke liye iski zaroorat nahi.</p>
+            <datalist id="roleSuggestions">
+              <option value="root"></option>
+              <option value="torso"></option>
+              <option value="head"></option>
+              <option value="upper_arm_L"></option>
+              <option value="lower_arm_L"></option>
+              <option value="hand_L"></option>
+              <option value="upper_arm_R"></option>
+              <option value="lower_arm_R"></option>
+              <option value="hand_R"></option>
+              <option value="upper_leg_L"></option>
+              <option value="lower_leg_L"></option>
+              <option value="foot_L"></option>
+              <option value="upper_leg_R"></option>
+              <option value="lower_leg_R"></option>
+              <option value="foot_R"></option>
+            </datalist>
             <label style="margin-top:8px;">Rotation</label>
             <input type="range" id="rotSlider" min="-180" max="180" value="0" step="1" />
             <div class="lock-note" id="lockNote" style="display:none;">Is bone ka rotation asli rig mein disabled hai (rotationEnabled="false") -- slider phir bhi kaam karega, par original file isko rotate nahi karti thi.</div>
@@ -235,6 +255,14 @@
               <button class="small" id="exportAnaBtn" style="flex:1;">&#11015; .ana Export</button>
             </div>
             <div class="hint" id="exportAnaNote" style="display:none; margin-top:4px;">.ana export sirf tab milta hai jab original upload ek .ana bundle ho (seedhi .fla upload ke liye sirf .fla export use karo).</div>
+          </div>
+          <div class="selected-panel">
+            <h2 style="margin-bottom:4px;">Extract Animation (isi file ke andar se)</h2>
+            <p class="hint">Agar is file mein already koi real animation hai (jaise ek asli walk/talk cycle jisme bones nahi hain, sirf parts hain) -- uska real per-frame rotation data isi rig pe utaar ke ek naya keyframe sequence bana do. Kuch bhi invent nahi hota, sirf asli file ke real matrices padhe jaate hain.</p>
+            <label>Us animation ka symbol chuno</label>
+            <select id="extractSymbolPick"></select>
+            <button class="small" id="extractBtn">Extract Karo</button>
+            <div class="hint" id="extractReport" style="margin-top:8px; white-space:pre-wrap;"></div>
           </div>
         </div>
       </div>
@@ -1257,6 +1285,95 @@ function extractCharacterParts(project, targetSymbol) {
   return { parts, fps: project.frameRate };
 }
 
+// Real files reuse the SAME part under many names once duplicated for a
+// second animation ("Left leg" -> "Left leg copy 4", sometimes filed under
+// "Duplicate Items Folder/") -- Animate's own duplication convention, not
+// something we invent. Strips exactly that (a folder prefix, a trailing
+// "copy"/"copy N") and ignores case/spacing/underscores so "Left_leg" and
+// "Left leg copy 4" are recognized as the same real part.
+function normalizePartBaseName(raw) {
+  return unescapeEntities(raw || "")
+    .replace(/^.*\//, "")
+    .replace(/\s*copy\s*\d*\s*$/i, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "");
+}
+
+// Pulls REAL rotation-over-time out of an EXISTING, already-authored
+// timeline (e.g. a real walk-cycle symbol) and re-expresses it against the
+// CURRENTLY loaded rig's own real parts (by name, tolerant of Animate's own
+// duplicate-copy naming) -- never invents an angle, only reads the real
+// <Matrix> already on each of that timeline's own real keyframes and
+// decomposes it relative to that same layer's own first real keyframe.
+// Real per-layer LOOP/firstFrame nesting (see CLAUDE.md's own note on this)
+// is deliberately NOT resolved here -- only a layer's OWN directly-declared
+// <DOMFrame> keyframes are read, same granularity the manual rig editor
+// itself already works at.
+function extractTimelineKeyframes(project, sourceSymbolName, targetParts) {
+  const layers = project.getTimelineLayers(sourceSymbolName);
+  const targetByNorm = new Map(targetParts.map((p) => [normalizePartBaseName(p.name), p]));
+  const matchedLayers = [];
+  const unmatchedLayers = [];
+
+  for (const layer of layers) {
+    const layerName = layer.getAttribute("name") || "";
+    const found0 = getFrameForLayer(layer, 0);
+    let libName = "";
+    if (found0) {
+      const elementsEl = findChildLocal(found0.frame, "elements");
+      const inst = elementsEl ? findChildrenLocal(elementsEl, "DOMSymbolInstance")[0] : null;
+      if (inst) libName = unescapeEntities(inst.getAttribute("libraryItemName") || "");
+    }
+    let matchedPart = null;
+    for (const candidate of [layerName, libName]) {
+      if (!candidate) continue;
+      const hit = targetByNorm.get(normalizePartBaseName(candidate));
+      if (hit) { matchedPart = hit; break; }
+    }
+    if (matchedPart) matchedLayers.push({ part: matchedPart, layer });
+    else if (layerName || libName) unmatchedLayers.push(layerName || libName);
+  }
+
+  const frameIndexSet = new Set([0]);
+  const perPartFrames = new Map(); // targetPartName -> [{frame, deg}]
+  const nonRigidWarnings = [];
+
+  for (const { part, layer } of matchedLayers) {
+    const framesEl = findChildLocal(layer, "frames");
+    const domFrames = framesEl ? findChildrenLocal(framesEl, "DOMFrame") : [];
+    if (!domFrames.length) continue;
+    let restLib = null;
+    let restDeg = null;
+    const entries = [];
+    for (const f of domFrames) {
+      const idx = parseInt(f.getAttribute("index") || "0", 10);
+      const elementsEl = findChildLocal(f, "elements");
+      const inst = elementsEl ? findChildrenLocal(elementsEl, "DOMSymbolInstance")[0] : null;
+      if (!inst) continue;
+      const lib = unescapeEntities(inst.getAttribute("libraryItemName") || "");
+      const m = instanceMatrix(inst);
+      const deg = matDecomposeRotation(m);
+      if (restLib === null) { restLib = lib; restDeg = deg; }
+      else if (lib !== restLib) {
+        nonRigidWarnings.push(`${part.name} @ frame ${idx}: real art switched to a different symbol ("${lib}"), not just rotated -- that frame's real shape can't be expressed as a rotation of the rest one, so it was skipped.`);
+        continue;
+      }
+      frameIndexSet.add(idx);
+      entries.push({ frame: idx, deg: deg - restDeg });
+    }
+    perPartFrames.set(part.name, entries);
+  }
+
+  return {
+    frameIndices: Array.from(frameIndexSet).sort((a, b) => a - b),
+    perPartFrames,
+    matchedParts: matchedLayers.map((m) => m.part.name),
+    unmatchedLayers,
+    nonRigidWarnings,
+  };
+}
+
 // Writes a calibrated rig's corrected REST matrices back into the real
 // XFL XML they came from, and re-zips it as a real, re-uploadable .fla --
 // only the exact <DOMSymbolInstance>s this rig touched are changed
@@ -1345,7 +1462,6 @@ function analyzeTimelineLayers(layers) {
   }
   return { keyframes: maxKeyframes, layers: layers.length, hasIkBones: hasIk };
 }
-
 </script>
 <script>
 // ---- matrix helpers for pose editing (same convention as engine.js's
@@ -2140,24 +2256,92 @@ class RigView {
     return {
       source: { symbol: this.rig.symbol },
       fps: this.rig.fps,
-      parts: this.rig.parts.map((p) => ({ name: p.name, parent: p.parent, base_matrix: p.matrix })),
+      // `role` is a human-assigned, optional universal bone tag (e.g.
+      // "upper_leg_L") -- never guessed -- so a DIFFERENTLY-named part on
+      // another character can still be matched when the two characters'
+      // real part names don't happen to agree (applyAnimationJson's own
+      // note). Empty string when never assigned; harmless to always emit.
+      parts: this.rig.parts.map((p) => ({ name: p.name, parent: p.parent, base_matrix: p.matrix, role: p.role || "" })),
       keyframes: this.keyframes,
     };
   }
 
   // Apply an externally-recorded animation (same shape as exportJson()) onto
-  // THIS rig's own real parts, matched by name -- never guesses a mapping
-  // between differently-named parts. Returns the list of animation part
-  // names that had no match here.
+  // THIS rig's own real parts. Matched by real NAME first (same as always);
+  // when a source part's name has no match here but it carries a real
+  // human-assigned `role` that exactly one of THIS rig's own parts also
+  // carries, matched by role instead -- this is what makes retargeting
+  // work across two DIFFERENTLY-NAMED characters (e.g. Motu Sheth's
+  // "Left_leg" onto rajuuu's "UP LEG L"), never by guessing a mapping
+  // between the raw names themselves. Returns the list of source part
+  // names that matched neither way.
+  //
+  // A pose is never copied as a raw matrix -- that only ever looks right
+  // when both characters happen to share the exact same rest matrices
+  // (true for two exports of the same rig, accidentally). Instead each
+  // source keyframe matrix is decomposed into a rotation DELTA from that
+  // source part's own real rest angle (`base_matrix`, carried in the JSON
+  // itself), and that same delta is re-applied on top of THIS rig's own
+  // real rest angle for the matched part -- so two characters with
+  // different proportions/rest poses still end up with the same relative
+  // motion, not a mismatched absolute transform.
   applyAnimationJson(anim) {
     this.pushHistory();
-    const ourNames = new Set(this.rig.parts.map((p) => p.name));
-    const missing = anim.parts.filter((p) => !ourNames.has(p.name)).map((p) => p.name);
-    this.keyframes = anim.keyframes.map((kf) => ({
-      frame: kf.frame,
-      poses: Object.fromEntries(Object.entries(kf.poses).filter(([name]) => ourNames.has(name))),
-    }));
+    const ourByName = new Map(this.rig.parts.map((p) => [p.name, p]));
+    const ourByRole = new Map();
+    for (const p of this.rig.parts) {
+      if (!p.role) continue;
+      ourByRole.set(p.role, ourByRole.has(p.role) ? null : p); // null = ambiguous, never guess which
+    }
+    const nameMap = new Map(); // source part name -> { targetPart, srcRestDeg }
+    const missing = [];
+    for (const srcPart of anim.parts) {
+      const targetPart = ourByName.get(srcPart.name) || (srcPart.role ? ourByRole.get(srcPart.role) : null);
+      if (targetPart) nameMap.set(srcPart.name, { targetPart, srcRestDeg: matDecomposeRotation(srcPart.base_matrix) });
+      else missing.push(srcPart.name);
+    }
+    this.keyframes = anim.keyframes.map((kf) => {
+      const poses = {};
+      for (const [srcName, srcMatrix] of Object.entries(kf.poses)) {
+        const map = nameMap.get(srcName);
+        if (!map) continue;
+        const { targetPart, srcRestDeg } = map;
+        const delta = matDecomposeRotation(srcMatrix) - srcRestDeg;
+        const targetRestDeg = matDecomposeRotation(targetPart.matrix);
+        poses[targetPart.name] = matWithRotationAroundPivot(targetPart.matrix, targetPart, targetRestDeg + delta);
+      }
+      return { frame: kf.frame, poses };
+    });
     return missing;
+  }
+
+  // Builds a full keyframe sequence for THIS rig directly from an EXISTING,
+  // already-authored timeline elsewhere in the same project (see
+  // extractTimelineKeyframes's own note) -- every angle here is read off a
+  // real <Matrix> the artist already made, never guessed; only which of
+  // OUR parts each one belongs to is figured out (by name).
+  applyExtractedTimeline(extraction) {
+    this.pushHistory();
+    this.keyframes = extraction.frameIndices.map((frameIdx) => {
+      const poses = {};
+      for (const part of this.rig.parts) {
+        const entries = extraction.perPartFrames.get(part.name);
+        if (!entries || !entries.length) { poses[part.name] = (this.pose[part.name] || part.matrix).slice(); continue; }
+        let before = null, after = null;
+        for (const e of entries) {
+          if (e.frame <= frameIdx) before = e;
+          if (e.frame >= frameIdx && !after) after = e;
+        }
+        if (!before) before = entries[0];
+        if (!after) after = entries[entries.length - 1];
+        const t = after.frame === before.frame ? 0 : (frameIdx - before.frame) / (after.frame - before.frame);
+        const deg = before.deg + (after.deg - before.deg) * t;
+        const restDeg = matDecomposeRotation(part.matrix);
+        poses[part.name] = matWithRotationAroundPivot(part.matrix, part, restDeg + deg);
+      }
+      return { frame: frameIdx, poses };
+    });
+    if (this.keyframes.length) this.applyFrame(this.keyframes[0].frame);
   }
 }
 </script>
@@ -2236,8 +2420,37 @@ $("loadRigBtn").addEventListener("click", () => {
     const hasBundle = !!mainProject.bundleOuterZip;
     $("exportAnaBtn").disabled = !hasBundle;
     $("exportAnaNote").style.display = hasBundle ? "none" : "block";
+    populateSymbolPicker($("extractSymbolPick"), mainProject);
+    $("extractReport").textContent = "";
   } catch (e) {
     $("rigErr").textContent = e.message;
+    console.error(e);
+  }
+});
+
+$("extractBtn").addEventListener("click", () => {
+  $("extractReport").textContent = "";
+  if (!mainView) return;
+  try {
+    const symbol = decodeURIComponent($("extractSymbolPick").value);
+    const extraction = extractTimelineKeyframes(mainProject, symbol, mainView.rig.parts);
+    mainView.applyExtractedTimeline(extraction);
+    currentFrame = extraction.frameIndices[0] || 0;
+    $("frameNum").value = currentFrame;
+    renderKfList();
+    if (mainView.selectedPart) showSelectedPanel(mainView.selectedPart);
+    updateUndoRedoButtons();
+    let msg = `Match hue real parts: ${extraction.matchedParts.join(", ") || "(koi nahi -- naam mismatch check karo)"}\n`;
+    msg += `Keyframes bane: ${extraction.frameIndices.length} (frames: ${extraction.frameIndices.join(", ")})`;
+    if (extraction.unmatchedLayers.length) {
+      msg += `\n\nIn layers ka koi naam match nahi hua (inme rotation nahi aayi): ${extraction.unmatchedLayers.join(", ")}`;
+    }
+    if (extraction.nonRigidWarnings.length) {
+      msg += `\n\nWARNING -- kuch frames mein real SHAPE hi badal gaya (sirf matrix nahi), wo ek rotation ki tarah nahi dikhaye ja sakte, isliye skip kiye:\n` + extraction.nonRigidWarnings.join("\n");
+    }
+    $("extractReport").textContent = msg;
+  } catch (e) {
+    $("extractReport").textContent = "Extract fail ho gaya: " + e.message;
     console.error(e);
   }
 });
@@ -2268,10 +2481,17 @@ function showSelectedPanel(name) {
   const others = mainView.rig.parts.filter((p) => p.name !== name).map((p) => p.name);
   $("parentPick").innerHTML = `<option value="">(root -- no parent)</option>` + others.map((n) =>
     `<option value="${n}" ${n === part.parent ? "selected" : ""}>${n}</option>`).join("");
+  $("rolePick").value = part.role || "";
   const m = mainView.pose[name] || part.matrix;
   $("rotSlider").value = Math.round(matDecomposeRotation(m));
   $("lockNote").style.display = part.rotationEnabled === false ? "block" : "none";
 }
+
+$("rolePick").addEventListener("change", () => {
+  if (!mainView.selectedPart) return;
+  const part = mainView.rig.parts.find((p) => p.name === mainView.selectedPart);
+  part.role = $("rolePick").value.trim();
+});
 
 $("parentPick").addEventListener("change", () => {
   if (!mainView.selectedPart) return;
