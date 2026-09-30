@@ -1366,7 +1366,21 @@ function applyMatToPoint(m, pt) { return { x: m[0] * pt.x + m[2] * pt.y + m[4], 
 // extracted from the file's own transformationPoint but previously never
 // used) -- passing (0,0) here reproduces the old, wrong behavior exactly,
 // which is why it's a required argument, not a default.
-function matWithRotationAroundPivot(m, pivot, angleDeg) {
+//
+// Takes the whole `part` (not just its pivot) only to read `part.pivot`;
+// the returned matrix is a PURE rotation (real scale/mirror carried over,
+// nothing else touched) -- `pose[name]` must stay a clean similarity
+// transform, since `matDecomposeRotation` (the rotation slider, 15° snap,
+// arrow nudge, undo, JSON/.fla export) all assume atan2(m[1],m[0]) IS the
+// true angle. The cosmetic stretch effect below is applied ONLY at
+// render time, as a separate matrix composed on top of this one for
+// display -- never baked in here -- precisely so it can never corrupt
+// that decompose (a real regression hit while building it: baking stretch
+// directly into this matrix skewed its column vectors, so a "15° snap"
+// drag decomposed back to 15.39° instead of exactly 15 -- caught by the
+// existing snap-angle regression test, not just visually).
+function matWithRotationAroundPivot(m, part, angleDeg) {
+  const pivot = part.pivot;
   const [a, b, c, d, tx, ty] = m;
   const scaleX = Math.hypot(a, b) || 1;
   const scaleY = Math.hypot(c, d) || 1;
@@ -1378,6 +1392,42 @@ function matWithRotationAroundPivot(m, pivot, angleDeg) {
   const oldWorldPivot = { x: a * px + c * py + tx, y: b * px + d * py + ty };
   const newLinearOnPivot = { x: na * px + nc * py, y: nb * px + nd * py };
   return [na, nb, nc, nd, oldWorldPivot.x - newLinearOnPivot.x, oldWorldPivot.y - newLinearOnPivot.y];
+}
+
+// DELIBERATELY SYNTHETIC, render-only cosmetic: these rigs are real
+// separate rigid cutout pieces (no mesh/bone-weight data exists in the
+// file at all -- confirmed by inspecting a real character's XFL directly:
+// zero <DOMShape> inside the character symbol, all 112 elements are
+// <DOMSymbolInstance>), so a part rotated well away from the artist's own
+// originally-drawn angle can show a real seam/gap at its joint (the art
+// was only drawn to fit seamlessly AT that angle). Explicitly OK'd by the
+// user to add a small non-real "stretch to soften the seam" -- gently
+// elongating the part along its own real geometry's away-from-pivot
+// direction (`part.stretchAxis`, precomputed once in `_buildDom` from the
+// part's real rendered bbox, never guessed), scaled by how far the
+// CURRENT angle has moved from the part's real REST angle (`part.matrix`'s
+// own rotation) and capped at MAX_STRETCH so it stays a subtle nicety, not
+// a visible warp. Returns a matrix meant to be composed OUTSIDE/AFTER the
+// part's clean world matrix (`matCompose(worldMatrix, this)`), applied
+// only to the rendered `<g>`'s transform -- never stored in `pose`, never
+// exported, and never used for the bone-overlay dots/lines, which must
+// keep showing the real (unstretched) rig.
+const MAX_STRETCH = 0.12;
+function matStretchLocal(part, currentAngleDeg) {
+  if (!part.stretchAxis) return [1, 0, 0, 1, 0, 0];
+  const restDeg = matDecomposeRotation(part.matrix);
+  const deltaDeg = ((currentAngleDeg - restDeg + 540) % 360) - 180;
+  const t = Math.min(Math.abs(deltaDeg) / 90, 1);
+  const k = t * MAX_STRETCH;
+  const { x: ux, y: uy } = part.stretchAxis;
+  // S = I + k * (u outer u): scales by (1+k) along axis u, 1 perpendicular.
+  const sxx = 1 + k * ux * ux, sxy = k * ux * uy, syy = 1 + k * uy * uy;
+  const [px, py] = part.pivot;
+  // Anchored at the pivot: result = S*(p - pivot) + pivot, as one combined
+  // affine matrix (translate(pivot) . S . translate(-pivot)).
+  const tx = px - (sxx * px + sxy * py);
+  const ty = py - (sxy * px + syy * py);
+  return [sxx, sxy, sxy, syy, tx, ty];
 }
 
 // Sibling elements within one <elements> block keep real file order (first
@@ -1635,6 +1685,16 @@ class RigView {
         outline.setAttribute("class", "part-outline");
         outline.style.opacity = 0;
         poseGroup.appendChild(outline);
+        // Precompute a per-part "stretch axis" from the part's OWN real
+        // rendered geometry (bbox center relative to its real pivot) --
+        // used only for the synthetic gap-masking stretch effect in
+        // matWithRotationAroundPivot (see its own note): a direction
+        // derived from real local art, even though the stretch amount
+        // itself is an invented rendering nicety, not real file data.
+        const cx = bbox.x + bbox.width / 2, cy = bbox.y + bbox.height / 2;
+        const dx = cx - part.pivot[0], dy = cy - part.pivot[1];
+        const len = Math.hypot(dx, dy);
+        part.stretchAxis = len > 1e-6 ? { x: dx / len, y: dy / len } : { x: 0, y: 1 };
       } catch (e) { /* empty content (e.g. an all-mask part) -- no outline */ }
       this.outlineRects[part.name] = outline;
 
@@ -1719,7 +1779,15 @@ class RigView {
       // knee, the origin floats off the body for several parts).
       jointWorld[part.name] = applyMatToPoint(wm, { x: part.pivot[0], y: part.pivot[1] });
       const g = this.partGroups[part.name];
-      if (g) g.setAttribute("transform", matToStr(wm));
+      if (g) {
+        // The cosmetic stretch (see matStretchLocal's own note) is composed
+        // on top of the CLEAN world matrix only for this rendered group's
+        // transform -- pose[name] itself (used for the bone overlay above,
+        // decompose, undo, export) never sees it.
+        const curAngle = matDecomposeRotation(this.pose[part.name] || part.matrix);
+        const stretchMat = matStretchLocal(part, curAngle);
+        g.setAttribute("transform", matToStr(matCompose(wm, stretchMat)));
+      }
     }
     const dotR = this._dotRadius();
     for (const part of this.rig.parts) {
@@ -1851,23 +1919,16 @@ class RigView {
     // translates -- that's how the whole character gets repositioned.
     // "move" mode is rig calibration, not posing -- always a free drag
     // (there's no joint to protect; the human is deliberately re-anchoring
-    // the art). "animate" mode is rotate-only for EVERY part, including a
-    // parentless root: the root has no real joint, but it still has its
-    // own real pivot, so rotating it spins the whole character in place
-    // around that fixed point -- it can never drift/translate away from
-    // its base stage position. This keeps the whole rig's on-stage
-    // position permanently fixed while animating (a walk cycle etc. is
-    // then just limb rotation, never an accidental whole-body move) --
-    // deliberate repositioning of the whole character is still possible,
-    // but only in "Move Parts" mode, which stays a true free drag for
-    // every part.
+    // the art). "animate" mode keeps the joint-preserving rotate-only
+    // behavior (rotate for anything with a real parent, free-translate
+    // only for a parentless root, so the whole character can be placed).
     const mode = this.editMode === "move" ? "translate" : "rotate";
     const pivot = part.pivot;
     const pivotInParentFrame = applyMatToPoint(startLocal, { x: pivot[0], y: pivot[1] });
     const startLocalPoint = applyMatToPoint(parentInv, start);
     const startAngle = Math.atan2(startLocalPoint.y - pivotInParentFrame.y, startLocalPoint.x - pivotInParentFrame.x);
     const startRotationDeg = matDecomposeRotation(startLocal);
-    this.dragState = { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg, pivot, pivotInParentFrame };
+    this.dragState = { name, part, parentInv, start, startLocal, mode, startAngle, startRotationDeg, pivot, pivotInParentFrame };
     try { targetEl.setPointerCapture(evt.pointerId); } catch (e) { /* best-effort only, see _wireZoomPan's note */ }
     const move = (e) => this._onPointerMove(e);
     const up = () => {
@@ -1882,7 +1943,7 @@ class RigView {
 
   _onPointerMove(evt) {
     if (!this.dragState) return;
-    const { name, parentInv, start, startLocal, mode, startAngle, startRotationDeg, pivot, pivotInParentFrame } = this.dragState;
+    const { name, part, parentInv, start, startLocal, mode, startAngle, startRotationDeg, pivotInParentFrame } = this.dragState;
     const cur = this.localPoint(evt);
     if (mode === "translate") {
       const d0 = applyMatToPoint(parentInv, start);
@@ -1899,7 +1960,7 @@ class RigView {
       // own Free Transform constrain-angle behavior.
       let targetDeg = startRotationDeg + deltaDeg;
       if (this.snapRotation || evt.shiftKey) targetDeg = Math.round(targetDeg / 15) * 15;
-      this.pose[name] = matWithRotationAroundPivot(startLocal, pivot, targetDeg);
+      this.pose[name] = matWithRotationAroundPivot(startLocal, part, targetDeg);
     }
     this.updateTransforms();
     if (this.onPoseChange) this.onPoseChange();
@@ -2136,7 +2197,7 @@ $("rotSlider").addEventListener("input", () => {
   if (!rotSliderPushed) { mainView.pushHistory(); rotSliderPushed = true; }
   const m = mainView.pose[mainView.selectedPart];
   const part = mainView.rig.parts.find((p) => p.name === mainView.selectedPart);
-  mainView.pose[mainView.selectedPart] = matWithRotationAroundPivot(m, part.pivot, parseFloat($("rotSlider").value));
+  mainView.pose[mainView.selectedPart] = matWithRotationAroundPivot(m, part, parseFloat($("rotSlider").value));
   mainView.updateTransforms();
   if (mainView.editMode === "move") mainView._commitBase(mainView.selectedPart);
 });
@@ -2286,7 +2347,7 @@ window.addEventListener("keydown", (evt) => {
   const m = mainView.pose[mainView.selectedPart];
   const part = mainView.rig.parts.find((p) => p.name === mainView.selectedPart);
   const newDeg = matDecomposeRotation(m) + delta;
-  mainView.pose[mainView.selectedPart] = matWithRotationAroundPivot(m, part.pivot, newDeg);
+  mainView.pose[mainView.selectedPart] = matWithRotationAroundPivot(m, part, newDeg);
   mainView.updateTransforms();
   if (mainView.editMode === "move") mainView._commitBase(mainView.selectedPart);
   $("rotSlider").value = Math.round(newDeg);

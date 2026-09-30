@@ -683,6 +683,51 @@ whole-character repositioning/calibration); in Animation mode the base is
 matching "bones data fixed rakhdo" literally rather than just
 approximately (fixed pivot, but still visibly swinging).
 
+### Synthetic "stretch to soften the seam" at rotated joints (explicitly OK'd by the user, not real file data)
+
+Referencing a competitor tool's screenshot (autodraft.in), asked for a
+"rubber" effect where a rotated part visually stretches a little rather
+than showing a gap at its seam. Checked the real premise directly before
+building anything: extracted RAJ BHAI's real `.fla` (working around the
+same EOCD-54-byte quirk `xfl_reader.py`/the standalone editor's JSZip fix
+both already handle) and grepped its character symbol for any real
+mesh/bone-weight data -- zero `<DOMShape>` inside it, all 112 elements are
+`<DOMSymbolInstance>`. Confirmed: these rigs are 100% separate rigid
+cutout pieces: there is no real per-vertex deformation data anywhere in
+the file to draw from, unlike whatever rig format the competitor tool
+uses. True stretch is therefore NOT recoverable real data -- doing it at
+all means inventing new geometry, which is exactly what the core rule
+normally forbids. Explicitly asked the user first (per that same rule)
+whether to add a synthetic version anyway; they said yes.
+
+Implementation, in the standalone editor (`ui.js`):
+- `part.stretchAxis`: precomputed ONCE per part in `_buildDom`, from the
+  part's own REAL rendered local bbox center relative to its real pivot
+  (normalized direction) -- the axis is derived from real geometry even
+  though the stretch itself is invented.
+- `matStretchLocal(part, currentAngleDeg)`: returns a pivot-anchored 2x2
+  scale (`I + k * (axis outer axis)`) where `k` scales with how far
+  `currentAngleDeg` has moved from the part's real REST angle
+  (`matDecomposeRotation(part.matrix)`), capped at `MAX_STRETCH = 0.12`
+  (12%) so it stays a subtle nicety.
+- **Real regression caught by the EXISTING test suite, not just visually**:
+  the first version baked this stretch directly into `matWithRotationAroundPivot`'s
+  returned matrix (the same one stored in `pose[name]`) -- which skewed
+  its column vectors, so `matDecomposeRotation` (used by the rotation
+  slider, "15° Snap", arrow-nudge, and this project's own regression test
+  for snap-angle correctness) no longer recovered the true angle: a
+  "15° snap" drag decomposed back to 15.39° instead of exactly 15. Fixed
+  by keeping `pose[name]` a PURE similarity transform (stretch removed
+  from `matWithRotationAroundPivot` entirely) and instead composing
+  `matStretchLocal`'s result OUTSIDE it, only on the rendered `<g>`'s
+  display transform in `updateTransforms()` (`matCompose(worldMatrix,
+  stretchMat)`) -- never stored in `pose`, never exported (JSON/.fla/.ana
+  keyframes stay the real, unstretched matrices), and never used for the
+  bone-overlay dots/lines (which must keep showing the real, unstretched
+  rig). Re-ran the full regression suite after the fix and the snap-angle
+  test is back to exactly 15°, confirming the two concerns (visual
+  stretch vs. correct angle bookkeeping) are now fully decoupled.
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes
