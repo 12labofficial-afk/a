@@ -214,7 +214,7 @@
         <div class="sidebar">
           <div>
             <h2 style="margin-bottom:4px;">Parts</h2>
-            <p class="hint" id="dragHint">Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Character ki poori body ki position hamesha FIXED rehti hai (root part bhi sirf apni jagah pe ghoomta hai, kahi jaata nahi) -- walk cycle jaisi animation banane ke liye bas haath-pair (limbs) hi ghumao.</p>
+            <p class="hint" id="dragHint">Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Character ki poori body ki position hamesha FIXED rehti hai -- root part (jiska koi parent nahi) is mode mein drag nahi hota bilkul, wo apni jagah pe permanently locked rehta hai. Walk cycle jaisi animation banane ke liye bas haath-pair (limbs) hi ghumao.</p>
             <ul class="part-list" id="partList"></ul>
           </div>
           <div class="selected-panel" id="selectedPanel" style="display:none;">
@@ -1821,8 +1821,18 @@ class RigView {
     const targetEl = evt.currentTarget;
     const name = targetEl.getAttribute("data-part");
     this.selectPart(name);
-    this.pushHistory();
     const part = this.rig.parts.find((p) => p.name === name);
+    // The root has no real joint, so "rotate it in place" still swings the
+    // WHOLE character through a big visible angle -- which reads as "the
+    // character moved" even though its pivot point never does. In
+    // Animation mode the root's own transform is instead left completely
+    // untouched (selectable, for visibility in the Parts list, but not
+    // draggable) -- posing/walk-cycle work is then ONLY ever the limbs
+    // articulating relative to that permanently fixed base. "Move Parts"
+    // mode still free-drags the root too, for deliberate whole-character
+    // repositioning/calibration.
+    if (this.editMode !== "move" && !part.parent) return;
+    this.pushHistory();
     const parentWorld = part.parent ? this.worldMatrix(part.parent) : [1, 0, 0, 1, 0, 0];
     const parentInv = matInverse(parentWorld);
     const start = this.localPoint(evt);
@@ -2309,7 +2319,7 @@ $("zoomOutBtn").addEventListener("click", () => mainView && mainView.zoomAroundC
 $("zoomFitBtn").addEventListener("click", () => mainView && mainView.resetZoom());
 
 const DRAG_HINT = {
-  animate: "Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Character ki poori body ki position hamesha FIXED rehti hai (root part bhi sirf apni jagah pe ghoomta hai, kahi jaata nahi) -- walk cycle jaisi animation banane ke liye bas haath-pair (limbs) hi ghumao.",
+  animate: "Part pe tap karke select karo, phir stage pe drag karke uska joint ke around ROTATE karo -- bones kabhi ek doosre se alag nahi honge, sirf angle badlega. Character ki poori body ki position hamesha FIXED rehti hai -- root part (jiska koi parent nahi) is mode mein drag nahi hota bilkul, wo apni jagah pe permanently locked rehta hai. Walk cycle jaisi animation banane ke liye bas haath-pair (limbs) hi ghumao.",
   move: "RIG CALIBRATION MODE: ab drag se part FREELY move hota hai (uska apna joint bhi shift hota hai) -- isse part ko uske real bone pe sahi jagah pe attach karo. Jab sahi lage, neeche 'Rig Export' se save kar lo.",
 };
 document.querySelectorAll('#modeToggle input[name="editMode"]').forEach((radio) => {

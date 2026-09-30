@@ -662,6 +662,27 @@ including root) -- updated both the on-screen drag hint and the mode's
 own tooltip text to describe this instead of the old "drag root to move
 the character" guidance, which is no longer true in Animation mode.
 
+**Follow-up: rotating the root in place still LOOKS like the character
+moved, so it's now not draggable at all.** Reported straight back with a
+screenshot: "move kyu ho raha hai ye?" -- the fix above kept the root's
+PIVOT world position provably fixed, but rotating the whole character by
+even a moderate angle (e.g. 34°) still visibly swings the ENTIRE body
+across the stage into a completely different-looking silhouette (in the
+screenshot: the character now diagonal, half off the visible stage area)
+-- which reads as "it moved" to the user even though, technically, only
+its orientation changed around a fixed point. That's not what "position
+fix rakho" meant. Fixed harder: in Animation mode, a pointerdown on the
+root now does nothing at all beyond selecting it (`_onPointerDown`
+returns immediately after `if (this.editMode !== "move" && !part.parent)
+return;`, before `pushHistory()` and before any dragState is created) --
+verified directly: dispatching a real drag on the root now leaves its
+pose matrix byte-for-byte identical and pushes no undo entry. The root's
+transform is only ever touched in "Move Parts" mode now (deliberate
+whole-character repositioning/calibration); in Animation mode the base is
+100% locked and posing is exclusively the limbs articulating around it,
+matching "bones data fixed rakhdo" literally rather than just
+approximately (fixed pivot, but still visibly swinging).
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes
