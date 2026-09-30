@@ -635,6 +635,33 @@ active first before assuming one, since this is the one case in the tool
 where a part intentionally moving away from its parent is correct,
 expected behavior, not something to fix.
 
+### Animation mode's root part now rotates in place instead of free-translating
+
+Requested: "position fix rakho bones ki, full body move nahi hogi kahi par
+bhi... matlab mai walk karwau toh mujhe bas haath per hilane h only and
+walk ho jayega" -- build a walk cycle (or any animation) by only rotating
+limbs, with the character's on-stage position never drifting. Previously
+the ROOT part (no real parent) was the one exception to "Animation" mode's
+rotate-only rule -- it free-translated, "so the whole character can be
+placed" -- so an accidental drag on the root during posing would shift the
+ENTIRE rig off its base stage position, which is exactly the kind of drift
+that makes building a keyframe sequence fiddly.
+
+Fixed: `_onPointerDown`'s mode selection is now simply
+`this.editMode === "move" ? "translate" : "rotate"` -- EVERY part rotates
+around its own real pivot in Animation mode, including the root. A root
+has no real joint (nothing above it to preserve), but it still has its own
+real pivot, so dragging it now spins the WHOLE character in place around
+that fixed point instead of sliding it anywhere -- verified directly:
+computed the root's pivot world position before and after a large drag
+(34° rotation) and it's bit-for-bit identical, while a screenshot
+comparison shows the whole rig rotating in place around a fixed point, no
+drift. Deliberate whole-character repositioning is still possible, but
+only in "Move Parts" mode (still a true free drag for every part,
+including root) -- updated both the on-screen drag hint and the mode's
+own tooltip text to describe this instead of the old "drag root to move
+the character" guidance, which is no longer true in Animation mode.
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes
