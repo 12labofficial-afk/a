@@ -54,7 +54,7 @@
   .bone-joint[data-locked="1"] { fill: #f87171; }
   .bone-joint[data-root="1"] { fill: #a855f7; stroke: #e9d5ff; }
   .bone-arrow-head { fill: #38bdf8; }
-  .hide-bones .bone-line, .hide-bones .bone-joint { display: none; }
+  .hide-bones .bone-line, .hide-bones .bone-joint, .hide-bones .bone-arrow-head { display: none; }
   .onion-prev { opacity: 0.22; }
   .onion-next { opacity: 0.22; }
   .onion-prev, .onion-next { pointer-events: none; }
@@ -160,7 +160,7 @@
         <div>
           <div class="stage-toolbar">
             <div style="display:flex; gap:14px; flex-wrap:wrap;">
-              <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="showBonesChk" checked /> Bones dikhao</label>
+              <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="showBonesChk" /> Bones dikhao</label>
               <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="onionChk" /> Onion skin</label>
               <label class="bones-toggle" style="margin:0;"><input type="checkbox" id="snapChk" /> 15&deg; Snap</label>
             </div>
@@ -2196,6 +2196,13 @@ $("frameNum").addEventListener("change", () => {
 $("recordBtn").addEventListener("click", () => {
   currentFrame = parseInt($("frameNum").value || "0", 10);
   mainView.recordKeyframe(currentFrame);
+  // Auto-advance to the next frame right after recording -- so posing and
+  // recording a whole sequence is just repeated (pose, tap Record, pose,
+  // tap Record...) without ever having to type a new frame number by
+  // hand in between. Recording again at the SAME frame (e.g. after
+  // manually rewinding) still just overwrites that keyframe, unchanged.
+  currentFrame += 1;
+  $("frameNum").value = currentFrame;
   renderKfList();
 });
 $("playBtn").addEventListener("click", () => {

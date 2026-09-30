@@ -583,6 +583,58 @@ selected-part panel (rotation slider, reparent), and Rig Export stayed in
 `.sidebar` -- they're secondary to the pose-then-keyframe loop the
 complaint was actually about.
 
+### Keyframe Record now auto-advances; bones/joints hidden by default; a real bone-arrow CSS bug
+
+Requested: "maine keyframe pe click kar diya apne aap ek keyframe us frame
+ko capture kar lega then next time keyframe pe click karu toh vo collect
+ho jayega" (click Record, it captures the current frame; click again
+later, it collects another) -- `recordKeyframe()` already did the actual
+capturing/collecting correctly (`RigView.recordKeyframe` in `ui.js`), but
+the Frame number never moved on its own, so a second click without
+manually retyping a new frame number just overwrote the SAME keyframe.
+Fixed: `recordBtn`'s click handler now bumps `currentFrame` by 1 and
+updates the Frame field right after recording, so posing + tapping Record
+repeatedly (no typing) naturally builds up a whole keyframe sequence.
+Recording again at a frame that already has a keyframe still just
+overwrites that one (unchanged, deliberate).
+
+Also requested: "joint dikhe nahi, parts me hi accha sa shape rahe human
+body jaisa" (don't show joints, just a clean human-body shape). The
+"Bones dikhao" checkbox already existed for exactly this and doesn't
+affect posing at all -- drag targets are each part's own `[data-part]`
+SVG group, completely separate elements from the `.bone-line`/
+`.bone-joint` overlay, so hiding the overlay never disables dragging.
+Made it the DEFAULT (checkbox starts unchecked) so the character looks
+clean immediately on load, toggle-able back on when precise joint
+selection is needed. While doing this, found a real (if minor) CSS bug:
+the "hide bones" rule (`.hide-bones .bone-line, .hide-bones .bone-joint`)
+never listed `.bone-arrow-head` -- so unchecking "Bones dikhao" hid the
+lines and dots but left the little direction-arrow triangles floating on
+their own. Fixed by adding `.bone-arrow-head` to that same CSS rule.
+
+### Real vs. by-design "part separated from its parent" -- Move Parts mode is a free drag, Animation mode never is
+
+Reported with a screenshot: a part appeared disconnected from the part
+above it, unlike Adobe's own rig where a part never detaches ("rubber"
+behavior) when you rotate something. Investigated by direct reproduction
+rather than guessing: in "Animation" mode, a drag is proven rotate-only
+around the part's real pivot (`matWithRotationAroundPivot`, see the pivot
+fix above) -- the joint's world position is mathematically fixed during
+the whole drag, so a part CANNOT detach this way, verified again here by
+directly mutating a part's pose translation in a live render and
+comparing: only a changed TRANSLATION (`pose[name][4]`/`[5]`) produces
+the visible gap-with-a-long-stretched-bone-line the user described, never
+a pure rotation. "Move Parts" mode's whole point IS a free
+translate/rotate (see "Two edit modes" above) -- it's for one-time rig
+calibration (re-anchoring art that wasn't drawn exactly on its bone), not
+for posing, and dragging there WILL visually separate a part from its
+parent by design, matching exactly the reported symptom. If a real
+detachment shows up while the mode toggle is on "Animation", that would
+be a genuine new bug worth its own repro -- but check which mode was
+active first before assuming one, since this is the one case in the tool
+where a part intentionally moving away from its parent is correct,
+expected behavior, not something to fix.
+
 ## Real rendering bugs auto-repaired at upload time (repair_and_extract)
 
 `repair_and_extract` now runs a few automatic, non-inventive repair passes
